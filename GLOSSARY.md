@@ -28,12 +28,15 @@ resolve to canonical sources. **Source roots:** a session rooted at the reposito
 names relative to a first-level directory that code puts on `sys.path` (`src/`, `backend/`): with
 the root at the repo, `from kernel import StateKernel` in `backend/server.py` still resolves to
 `backend/kernel/__init__.py`, and the Gate C sandbox binds that alias to the canonical source. An
-alias only resolves while it is unambiguous; a root-relative name always wins over an alias.
+alias only resolves while it is unambiguous, never when its top-level name is a standard-library
+module (`utils/json.py` does not capture `import json`); a root-relative name always wins over an alias.
 
 **Session persistence** — Every session is written to `<root>/.stepcheck/sessions/<session_id>.json`
 on each state change and indexed in `~/.stepcheck/sessions.json` (`STEPCHECK_HOME` overrides the
 directory). A fresh `StateKernel` (a gateway restart) rehydrates a known `session_id` on first use;
-an unknown or malformed id is a `KeyError` (404 at Seam 2).
+an unknown or malformed id is a `KeyError` (404 at Seam 2). `StateKernel(ephemeral=True)` is
+verification-only: gates, attestations and the graph work in memory, but no frame, session file,
+registry entry or tracked-file write-back is ever written — this is what `stepcheck ci` runs on.
 
 **StateKernel** — The single deep module behind Seam 1. Owns OKF compilation, sessions,
 checkout/commit, the three gates, locking, attestation, and telemetry. Everything else in

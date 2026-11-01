@@ -161,8 +161,12 @@ class _Session:
 
 
 class StateKernel:
-    def __init__(self) -> None:
+    def __init__(self, *, ephemeral: bool = False) -> None:
+        """`ephemeral=True` is verification-only (`stepcheck ci`): gates, attestations
+        and the graph work in memory, but nothing is written — no frames, session
+        files, registry entries, and no tracked-file write-back."""
         self._sessions: dict[str, _Session] = {}
+        self._ephemeral = ephemeral
 
     # -- Seam 1 -----------------------------------------------------------
 
@@ -412,7 +416,8 @@ class StateKernel:
     def _land(self, s: _Session, node: _Node, source: str) -> str:
         """Write gate-approved `source` to the tracked file; return the SHA-256 of
         the bytes on disk. Refuses to overwrite edits the kernel has not seen and
-        leaves the file alone (no write, no mtime churn) when the bytes are equal."""
+        leaves the file alone (no write, no mtime churn) when the bytes are equal.
+        An ephemeral kernel never writes: it attests the bytes that would land."""
         path = s.root / node.info.path
         try:
             existing = path.read_bytes()
@@ -422,6 +427,8 @@ class StateKernel:
                     f"— open a new session to pick up those edits"
                 )
             data = _okf.encode_like(source, existing)
+            if self._ephemeral:
+                return _sha256(data)
             if data != existing:
                 _okf.write_atomic(path, data)
         except (OSError, UnicodeError) as exc:
@@ -507,6 +514,8 @@ class StateKernel:
         return {sid: root for sid, root in data.items() if isinstance(root, str)}
 
     def _register(self, s: _Session) -> None:
+        if self._ephemeral:
+            return
         registry = {
             sid: root
             for sid, root in self._registry().items()
@@ -518,6 +527,8 @@ class StateKernel:
     def _persist(self, s: _Session) -> None:
         """Session payload -> `<root>/.stepcheck/sessions/<id>.json`, skipped when
         the bytes equal what this process last wrote."""
+        if self._ephemeral:
+            return
         data = json.dumps(_session_to_json(s), ensure_ascii=False).encode("utf-8")
         digest = _sha256(data)
         if digest == s.persisted_sha:
@@ -526,6 +537,8 @@ class StateKernel:
         s.persisted_sha = digest
 
     def _flush(self, s: _Session) -> None:
+        if self._ephemeral:
+            return
         s.frame_shas = _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes, s.frame_shas)
         self._persist(s)
 

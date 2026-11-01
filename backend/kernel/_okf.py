@@ -201,7 +201,9 @@ def write_frames(
 ) -> dict[str, str]:
     """Write one frame per node plus index.md. Returns {node_id | '__index__':
     sha256 of the frame text}; pass that back as `written` on the next call and
-    frames whose text did not change are left alone (no disk write)."""
+    frames whose text did not change are left alone (no disk write). Frames of
+    nodes this session does not track (left by an older session that named them
+    differently) are removed: the directory mirrors exactly one node set."""
     import hashlib
 
     okf_dir.mkdir(parents=True, exist_ok=True)
@@ -218,6 +220,9 @@ def write_frames(
         if previous.get(key) != digest:
             name = "index.md" if key == "__index__" else f"{key}.md"
             (okf_dir / name).write_text(text, encoding="utf-8")
+    for stale in okf_dir.glob("*.md"):
+        if stale.name != "index.md" and stale.stem not in nodes:
+            stale.unlink()
     return shas
 
 
@@ -547,14 +552,23 @@ def module_map(paths: dict[str, str]) -> dict[str, str]:
     its first directory stripped — the conventional source roots `src/`,
     `backend/`, … that land on sys.path, so `backend/kernel/__init__.py` is
     also `kernel` — and the bare stem (flat, sys.path-style projects). A
-    root-relative name always beats an alias of the same spelling."""
+    root-relative name always beats an alias of the same spelling, and an alias
+    whose top-level name belongs to the standard library is never registered:
+    `utils/json.py` must not capture `import json`."""
+    import sys
+
     out = {module_name(p): nid for nid, p in paths.items()}
+    stdlib = getattr(sys, "stdlib_module_names", frozenset())
     candidates: dict[str, set[str]] = {}
     for nid, p in paths.items():
         parts = p.replace("\\", "/").split("/")
+        names = {parts[-1].removesuffix(".py")}
         if len(parts) > 1:
-            candidates.setdefault(module_name("/".join(parts[1:])), set()).add(nid)
-        candidates.setdefault(parts[-1].removesuffix(".py"), set()).add(nid)
+            names.add(module_name("/".join(parts[1:])))
+        for name in names:
+            if name.split(".")[0] in stdlib:
+                continue
+            candidates.setdefault(name, set()).add(nid)
     for name, nids in candidates.items():
         if len(nids) == 1:
             out.setdefault(name, next(iter(nids)))

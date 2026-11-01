@@ -1,0 +1,3 @@
+# One byte stream everywhere: attestations are SHA-256 over file bytes, so a
+# CRLF checkout on Windows must not hash differently from Linux.
+* text=auto eol=lf
