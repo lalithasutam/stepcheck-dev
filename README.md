@@ -36,6 +36,19 @@ stepcheck audit             # audit your own Claude Code sessions → stepcheck-
 stepcheck ci backend        # headless gate: parse + attestations + Gates A/B/C for every module (CI/PR)
 ```
 
+## Claude Code slash commands (work out of the box after cloning)
+
+`.claude/commands/` ships four project commands. They need the gateway running (`stepcheck up`) and the
+`stepcheck` MCP server connected (`claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/`);
+`CLAUDE.md` supplies the rules they enforce.
+
+| Command | What it does |
+| --- | --- |
+| `/stepcheck-session [node_id …]` | Brings `:8420` up if needed, calls `init_project_session` on the repo root, locks the named modules (`lock_module_invariants`), prints the live Studio URL `…/studio/?session=<id>` |
+| `/stepcheck-fix <issue>` | Fixes the issue strictly through the gates: Red→Green test at a public seam, `checkout_context_frame` with a narrow `focus`, surgical `commit_verified_step` patch, re-verifies every `DIRTY_OMISSION_RISK` dependent until `can_finalize: true`, reports attestation sha256s and token savings |
+| `/stepcheck-ci [message]` | Runs `stepcheck ci .` (zero dirty nodes, zero SHA-256 drift, Gates A/B/C on every module) and the full `pytest -q`; only then commits with the given message (push only when asked) |
+| `/stepcheck-audit [path] [--limit N]` | Runs `stepcheck audit` on local Claude Code transcripts and summarises cache-cliff waste, Read-tool bloat vs AST skeletons, and the regressions a gate would have blocked |
+
 ## Run (development)
 
 ```bash
