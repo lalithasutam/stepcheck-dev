@@ -1,0 +1,49 @@
+{
+  "name": "stepcheck-studio",
+  "displayName": "StepCheck Studio",
+  "description": "Opens the StepCheck anti-context-rot verification workspace in a VS Code / Cursor webview.",
+  "version": "0.1.0",
+  "publisher": "stepcheck",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "stepcheck.openStudio",
+        "title": "Open Studio",
+        "category": "StepCheck"
+      },
+      {
+        "command": "stepcheck.openStudioToSide",
+        "title": "Open Studio to the Side",
+        "category": "StepCheck",
+        "enablement": "!stepcheck.studioOpen"
+      }
+    ],
+    "configuration": {
+      "title": "StepCheck",
+      "properties": {
+        "stepcheck.studioUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:5173",
+          "description": "URL of the running StepCheck Studio (Vite dev server or built preview)."
+        },
+        "stepcheck.gatewayUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8420",
+          "description": "Base URL of the StepCheck DualDoorGateway."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.0"
+  }
+}

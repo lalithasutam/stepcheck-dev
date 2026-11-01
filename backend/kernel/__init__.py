@@ -1,0 +1,462 @@
+"""StateKernel — the deep module behind Seam 1 (see GLOSSARY.md).
+
+Public interface, in full:
+    StateKernel().init_session(project_root) -> session_id
+    .checkout(session_id, node_id)           -> CheckoutPayload
+    .commit(session_id, node_id, source, *, allow_deletion=False) -> CommitVerdict
+    .lock_node(session_id, node_id)
+    .get_telemetry(session_id)               -> Telemetry
+
+Everything in `_`-prefixed modules is implementation, never interface.
+"""
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import json
+
+from . import _gates, _okf, _telemetry, _tokens
+
+
+def _sha256(data: str | bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()
+
+
+_DSSE_PAYLOAD_TYPE = "application/vnd.stepcheck.okf-commit+json"
+_DSSE_KEYID = "stepcheck-deterministic-v1"
+
+
+def _dsse_envelope(node_id: str, path: str, digest: str, exports: list[str], turn: int) -> dict:
+    """Deterministic SHA-256 / DSSE-style attestation (GLOSSARY: Gate C).
+    `digest` is the SHA-256 of the exact bytes written to the tracked file."""
+    import json
+
+    payload = {
+        "node_id": node_id,
+        "path": path,
+        "sha256": digest,
+        "exports": list(exports),
+        "turn": turn,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return {
+        "payloadType": _DSSE_PAYLOAD_TYPE,
+        "payload": payload,
+        "signatures": [
+            {"keyid": _DSSE_KEYID, "sig": _sha256(f"DSSEv1 {_DSSE_PAYLOAD_TYPE} {canonical}")}
+        ],
+    }
+
+__all__ = [
+    "StateKernel",
+    "CheckoutPayload",
+    "CommitVerdict",
+    "Telemetry",
+    "GateError",
+    "MechanicalError",
+    "OmissionError",
+    "LogicalError",
+]
+
+CHECKOUT_TOKEN_BUDGET = 4000  # hard cap on any CheckoutPayload (GLOSSARY)
+
+ACTIVE = "ACTIVE"
+VERIFIED = "VERIFIED"
+LOCKED = "LOCKED"
+DIRTY = "DIRTY_OMISSION_RISK"
+REJECTED = "REJECTED"
+
+
+class GateError(Exception):
+    """Base of every gate rejection."""
+
+
+class MechanicalError(GateError):
+    """Gate A: syntax, broken exported signatures, or locked-module mutation."""
+
+
+class OmissionError(GateError):
+    """Gate B: silent omission detected."""
+
+    def __init__(self, message: str, subtype: str):
+        super().__init__(message)
+        self.subtype = subtype
+
+
+class LogicalError(GateError):
+    """Gate C: a frame invariant no longer holds."""
+
+
+@dataclass(frozen=True)
+class CheckoutPayload:
+    session_id: str
+    node_id: str
+    frame_markdown: str
+    dependency_signatures: dict[str, list[str]]
+    locked_invariants: list[str]
+    token_count: int
+    dependency_skeletons: dict[str, str] = field(default_factory=dict)
+    focus: list[str] | None = None
+    auto_skeletonized: bool = False
+
+    def rendered(self) -> str:
+        return _render_payload(
+            self.frame_markdown, self.dependency_skeletons, self.locked_invariants
+        )
+
+
+def _render_payload(frame: str, dep_skeletons: dict[str, str], invariants: list[str]) -> str:
+    parts = [frame, "\n## Verified dependency interfaces (AST skeletons)\n"]
+    for dep, sk in sorted(dep_skeletons.items()):
+        parts.append(f"### {dep}\n```python\n{sk}```\n")
+    parts.append("\n## Locked invariants\n")
+    parts.extend(f"- {inv}\n" for inv in invariants)
+    return "".join(parts)
+
+
+@dataclass(frozen=True)
+class CommitVerdict:
+    accepted: bool
+    gate: str | None
+    error: GateError | None
+    attestation: dict | None
+    dirtied: list[str]
+
+
+@dataclass(frozen=True)
+class Telemetry:
+    raw_bloated_tokens: int
+    compacted_okf_tokens: int
+    tokens_saved: int
+    dollars_saved: float
+    omissions_blocked: int
+    turns: int
+
+
+@dataclass
+class _Node:
+    info: _okf.ModuleInfo
+    status: str = ACTIVE
+    locked: bool = False
+    verified: list[dict] = field(default_factory=list)
+    disk_sha256: str = ""  # SHA-256 of the tracked file as the kernel last saw it
+
+
+@dataclass
+class _Session:
+    session_id: str
+    root: Path
+    nodes: dict[str, _Node]
+    events: list[dict] = field(default_factory=list)
+    omissions_blocked: int = 0
+    scratchpad: list[dict] = field(default_factory=list)
+
+
+class StateKernel:
+    def __init__(self) -> None:
+        self._sessions: dict[str, _Session] = {}
+
+    # -- Seam 1 -----------------------------------------------------------
+
+    def init_session(self, project_root: str | Path) -> str:
+        root = Path(project_root)
+        files = sorted(
+            p
+            for p in root.rglob("*.py")
+            if ".stepcheck" not in p.parts and not p.name.startswith(".")
+        )
+        loaded: dict[Path, tuple[str, bytes]] = {}
+        for p in files:
+            raw = p.read_bytes()
+            try:
+                loaded[p] = (_okf.decode_source(raw), raw)
+            except UnicodeDecodeError:
+                continue  # not UTF-8: leave untracked, write-back could not round-trip it
+        module_names = {p.stem for p in loaded}
+        nodes: dict[str, _Node] = {}
+        for p, (text, raw) in loaded.items():
+            info = _okf.analyze(p.stem, str(p.relative_to(root)), text, module_names)
+            nodes[info.node_id] = _Node(info=info, disk_sha256=_sha256(raw))
+        session_id = f"sk-{uuid.uuid4().hex[:12]}"
+        session = _Session(session_id=session_id, root=root, nodes=nodes)
+        self._sessions[session_id] = session
+        self._flush(session)
+        return session_id
+
+    def checkout(
+        self,
+        session_id: str,
+        node_id: str,
+        *,
+        focus: list[str] | None = None,
+        at: float | None = None,
+    ) -> CheckoutPayload:
+        """`focus=None` → full frame. `focus=[names…]` → those defs verbatim,
+        the rest of the target as an AST skeleton. `focus=[]` → pure skeleton."""
+        s, node = self._get(session_id, node_id)
+        dep_sigs = {
+            dep: list(s.nodes[dep].info.exports)
+            for dep in node.info.deps
+            if dep in s.nodes
+        }
+        dep_skeletons = {
+            dep: _okf.interface_skeleton(s.nodes[dep].info.source)
+            for dep in node.info.deps
+            if dep in s.nodes
+        }
+        invariants = list(node.info.invariants)
+        for dep in node.info.deps:
+            if dep in s.nodes and s.nodes[dep].locked:
+                invariants.extend(s.nodes[dep].info.invariants)
+        frame = _okf.frame_markdown(
+            node.info, node.status, node.locked, node.verified,
+            focus=focus, fold_history=True,
+        )
+        rendered = _render_payload(frame, dep_skeletons, invariants)
+        tokens = _tokens.count(rendered)
+        auto = False
+        if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
+            # Unfocused frame would blow the budget: fall back to a pure AST
+            # skeleton with a symbol index so the agent can pick a focus.
+            frame = _okf.frame_markdown(
+                node.info, node.status, node.locked, node.verified,
+                focus=[], fold_history=True, symbol_index=True,
+            )
+            rendered = _render_payload(frame, dep_skeletons, invariants)
+            tokens = _tokens.count(rendered)
+            auto = True
+        s.events.append(
+            {
+                "kind": "checkout",
+                "node_id": node_id,
+                "tokens": tokens,
+                "full_tokens": _tokens.count(node.info.source),
+                "at": at,
+            }
+        )
+        return CheckoutPayload(
+            session_id=session_id,
+            node_id=node_id,
+            frame_markdown=frame,
+            dependency_signatures=dep_sigs,
+            locked_invariants=invariants,
+            token_count=tokens,
+            dependency_skeletons=dep_skeletons,
+            focus=focus,
+            auto_skeletonized=auto,
+        )
+
+    def commit(
+        self,
+        session_id: str,
+        node_id: str,
+        source: str | None = None,
+        *,
+        patch: list[dict] | None = None,
+        allow_deletion: bool = False,
+        at: float | None = None,
+    ) -> CommitVerdict:
+        """Stage either a full `source` or a `patch` of AST-level ops folded into
+        the node's canonical state, then run Gates A → B → C."""
+        s, node = self._get(session_id, node_id)
+        if (source is None) == (patch is None):
+            raise ValueError("commit() takes exactly one of source= or patch=")
+        if patch is not None:
+            try:
+                source = _okf.apply_patch(node.info.source, patch)
+            except ValueError as exc:
+                return self._reject(s, node, "A", MechanicalError(f"patch cannot fold: {exc}"))
+            sent_tokens = _tokens.count(json.dumps(patch, separators=(",", ":")))
+        else:
+            sent_tokens = _tokens.count(source)
+        assert source is not None
+        source = source.replace("\r\n", "\n")  # canonical state is always LF
+        try:
+            _gates.gate_a(node_id, node.locked, source, s.nodes)
+        except MechanicalError as exc:
+            return self._reject(s, node, "A", exc)
+
+        staged_info = _okf.analyze(node_id, node.info.path, source, set(s.nodes))
+        try:
+            _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion)
+        except OmissionError as exc:
+            return self._reject(s, node, "B", exc)
+
+        # Hand-written invariants always apply; auto-mined guards are waived by a
+        # declared deletion (the agent said it meant to remove behaviour).
+        live_invariants = (
+            [inv for inv in node.info.invariants if inv not in node.info.mined_invariants]
+            if allow_deletion
+            else node.info.invariants
+        )
+        try:
+            _gates.gate_c(
+                node_id,
+                live_invariants,
+                source,
+                {nid: n.info.source for nid, n in s.nodes.items() if nid != node_id},
+                mined=node.info.mined_invariants,
+            )
+        except LogicalError as exc:
+            return self._reject(s, node, "C", exc)
+
+        try:
+            digest = self._land(s, node, source)
+        except MechanicalError as exc:
+            return self._reject(s, node, "A", exc)
+        return self._accept(s, node, staged_info, digest, at=at, sent_tokens=sent_tokens)
+
+    def record_draft(self, session_id: str, node_id: str, text: str) -> None:
+        """Door-1 support: park an intermediate (unverified) agent turn."""
+        s = self._sessions[session_id]
+        s.scratchpad.append(
+            {"node_id": node_id, "text": text, "tokens": _tokens.count(text)}
+        )
+
+    def drafts(self, session_id: str) -> list[dict]:
+        return list(self._sessions[session_id].scratchpad)
+
+    def graph(self, session_id: str) -> dict:
+        """Read-only OKF graph view for Seam 2 / the UI (nodes + edges)."""
+        s = self._sessions[session_id]
+        nodes = [
+            {
+                "node_id": nid,
+                "path": n.info.path,
+                "status": n.status,
+                "locked": n.locked,
+                "deps": list(n.info.deps),
+                "exports": list(n.info.exports),
+                "preserved_symbols": list(n.info.preserved_symbols),
+                "invariants": list(n.info.invariants),
+                "invariants_auto_mined": list(n.info.mined_invariants),
+                "verified": len(n.verified),
+                "attestation": n.verified[-1] if n.verified else None,
+                "source": n.info.source,
+            }
+            for nid, n in sorted(s.nodes.items())
+        ]
+        edges = [
+            {"source": nid, "target": dep}
+            for nid, n in sorted(s.nodes.items())
+            for dep in n.info.deps
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    def get_telemetry(self, session_id: str) -> Telemetry:
+        s = self._sessions[session_id]
+        raw, compacted, turns = _telemetry.compute(s.events)
+        saved = raw - compacted
+        return Telemetry(
+            raw_bloated_tokens=raw,
+            compacted_okf_tokens=compacted,
+            tokens_saved=saved,
+            dollars_saved=_telemetry.dollars(saved),
+            omissions_blocked=s.omissions_blocked,
+            turns=turns,
+        )
+
+    def finalize_session(self, session_id: str) -> bool:
+        s = self._sessions[session_id]
+        dirty = sorted(n for n, node in s.nodes.items() if node.status == DIRTY)
+        if dirty:
+            raise OmissionError(
+                f"session cannot finalize: nodes {dirty} hold DIRTY_OMISSION_RISK "
+                f"and must be checked out and re-verified",
+                subtype="INTER_NODE_DIRTY",
+            )
+        return True
+
+    def lock_node(self, session_id: str, node_id: str) -> None:
+        s, node = self._get(session_id, node_id)
+        node.locked = True
+        node.status = LOCKED
+        self._flush(s)
+
+    def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError) -> CommitVerdict:
+        if not node.locked:
+            node.status = REJECTED
+        if gate in ("B", "C"):
+            s.omissions_blocked += 1
+        s.events.append({"kind": "reject", "node_id": node.info.node_id, "gate": gate})
+        self._flush(s)
+        return CommitVerdict(
+            accepted=False, gate=gate, error=exc, attestation=None, dirtied=[]
+        )
+
+    def _land(self, s: _Session, node: _Node, source: str) -> str:
+        """Write gate-approved `source` to the tracked file; return the SHA-256 of
+        the bytes written. Refuses to overwrite edits the kernel has not seen."""
+        path = s.root / node.info.path
+        try:
+            existing = path.read_bytes()
+            if _sha256(existing) != node.disk_sha256:
+                raise MechanicalError(
+                    f"'{node.info.path}' changed on disk since the session last read it "
+                    f"— open a new session to pick up those edits"
+                )
+            data = _okf.encode_like(source, existing)
+            _okf.write_atomic(path, data)
+        except (OSError, UnicodeError) as exc:
+            raise MechanicalError(f"could not write '{node.info.path}': {exc}")
+        node.disk_sha256 = _sha256(data)
+        return node.disk_sha256
+
+    def _accept(
+        self,
+        s: _Session,
+        node: _Node,
+        staged_info: _okf.ModuleInfo,
+        digest: str,
+        *,
+        at: float | None,
+        sent_tokens: int,
+    ) -> CommitVerdict:
+        exports_changed = staged_info.exports != node.info.exports
+        node.info = staged_info
+        node.status = VERIFIED
+
+        dirtied: list[str] = []
+        if exports_changed:
+            for dep_id, dep in sorted(s.nodes.items()):
+                if node.info.node_id in dep.info.deps and dep_id != node.info.node_id:
+                    dep.status = DIRTY
+                    dirtied.append(dep_id)
+
+        commit_ordinal = 1 + sum(1 for e in s.events if e["kind"] == "commit")
+        envelope = _dsse_envelope(
+            node.info.node_id,
+            node.info.path,
+            digest,
+            staged_info.exports,
+            commit_ordinal,
+        )
+        node.verified.append(envelope)
+        # Garbage-collect this node's dead-end scratchpad history.
+        s.scratchpad = [d for d in s.scratchpad if d["node_id"] != node.info.node_id]
+        s.events.append(
+            {
+                "kind": "commit",
+                "node_id": node.info.node_id,
+                "tokens": sent_tokens,  # the folded diff actually sent
+                "full_tokens": _tokens.count(staged_info.source),
+                "at": at,
+            }
+        )
+        self._flush(s)
+        return CommitVerdict(
+            accepted=True, gate=None, error=None, attestation=envelope, dirtied=dirtied
+        )
+
+    # -- internals --------------------------------------------------------
+
+    def _get(self, session_id: str, node_id: str) -> tuple[_Session, _Node]:
+        s = self._sessions[session_id]
+        return s, s.nodes[node_id]
+
+    def _flush(self, s: _Session) -> None:
+        _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes)

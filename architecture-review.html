@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>StepCheck Dev — Architecture Review</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0e1116; color:#d7dee7;
+         font:15px/1.55 "Segoe UI","Helvetica Neue",Arial,sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:40px 24px 80px; }
+  h1 { font-size:26px; letter-spacing:-.01em; margin:0 0 4px; }
+  h2 { font-size:17px; margin:40px 0 10px; color:#d7dee7; }
+  .sub { color:#8a96a5; margin:0 0 28px; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th,td { border:1px solid #232b35; padding:7px 10px; text-align:left;
+           vertical-align:top; }
+  th { background:#151a21; color:#8a96a5; font-weight:600; }
+  code { font:12.5px ui-monospace,Consolas,monospace; color:#d7dee7; }
+  .gA { color:#e25d5d; } .gB { color:#e0a33b; } .gC { color:#4c8dff; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+            background:#232b35; border:1px solid #232b35; margin:14px 0; }
+  .stats div { background:#151a21; padding:12px 14px; }
+  .stats b { display:block; font-size:21px; font-variant-numeric:tabular-nums; }
+  .stats span { color:#8a96a5; font-size:12px; }
+  .ok { color:#3fb87f; }
+  figure { margin:14px 0; border:1px solid #232b35; background:#151a21;
+            padding:14px; }
+  p { max-width:72ch; }
+</style></head><body><main>
+<h1>StepCheck Dev — architecture review</h1>
+<p class="sub">Anti-context-rot state engine · dual-door gateway · visual workspace
+· generated 2026-11-02 from the live repo and
+<code>benchmarks/results.json</code>.</p>
+
+<p><strong>Verdict: the deep-module bet holds, and the fold pays.</strong> One
+kernel behind one Python seam carries compilation, skeleton slicing, patch
+folding, three gates (now with semantic invariants), locking, attestation and
+telemetry in 1344 lines; everything HTTP-shaped lives behind the second
+seam (584 lines). 59 tests collected in 1.14s across the two seams, zero mocks of
+internals, and all four events injected into the 50-turn benchmark were caught
+at the intended gate.</p>
+
+<h2>Deep modules &amp; seams</h2>
+<table>
+<tr><th>Module</th><th>Interface</th><th>Implementation</th><th>Deletion test</th></tr>
+<tr><td><code>StateKernel</code> (Seam 1)</td>
+    <td>8 methods: init_session · checkout(focus=) · commit(source= | patch=) ·
+        lock_node · finalize_session · get_telemetry · record_draft/drafts · graph</td>
+    <td>1344 LOC across <code>kernel/</code> (_okf, _gates, _sandbox,
+        _telemetry, _tokens stay private); every kernel caveat from v1 and v2 is closed</td>
+    <td class="ok">Deleting any private module breaks only the kernel — no caller
+        imports them.</td></tr>
+<tr><td><code>DualDoorGateway</code> (Seam 2)</td>
+    <td>Door 1: <code>POST /v1/chat/completions</code> · <code>/v1/messages</code>
+        (BYOK or dry-run). Door 2: <code>/v1/step/*</code> ·
+        Streamable&nbsp;HTTP MCP at <code>/mcp</code> ·
+        <code>WS /v1/ws/{session_id}</code></td>
+    <td>584 LOC, stateless over the kernel</td>
+    <td class="ok">Gateway deletes cleanly: no kernel code knows HTTP exists.</td></tr>
+</table>
+
+<h2>50-turn coding-rot benchmark</h2>
+<div class="stats">
+  <div><b>132,779</b><span>raw bloated tokens (re-reads billed
+      past the 5-min cache cliff)</span></div>
+  <div><b>15,662</b><span>compacted OKF tokens actually sent</span></div>
+  <div><b class="ok">88.2%</b><span>tokens saved ·
+      $0.3514 at $3.00/MTok</span></div>
+  <div><b class="ok">4 / 4</b><span>injected events caught (B omission · B propagation · C · A)</span></div>
+</div>
+<figure><svg viewBox="0 0 760 260" role="img"
+  aria-label="Cumulative tokens over 50 turns: raw agent vs StepCheck">
+  <line x1="64" x2="744" y1="226" y2="226" stroke="#232b35"/><text x="56" y="230" text-anchor="end" font-size="11" fill="#5a6572">0k</text><line x1="64" x2="744" y1="174" y2="174" stroke="#232b35"/><text x="56" y="178" text-anchor="end" font-size="11" fill="#5a6572">33k</text><line x1="64" x2="744" y1="121" y2="121" stroke="#232b35"/><text x="56" y="125" text-anchor="end" font-size="11" fill="#5a6572">66k</text><line x1="64" x2="744" y1="68" y2="68" stroke="#232b35"/><text x="56" y="72" text-anchor="end" font-size="11" fill="#5a6572">99k</text><line x1="64" x2="744" y1="16" y2="16" stroke="#232b35"/><text x="56" y="20" text-anchor="end" font-size="11" fill="#5a6572">132k</text><line x1="328" x2="328" y1="16" y2="226" stroke="#e0a33b" stroke-dasharray="3 4"/><text x="328" y="242" text-anchor="middle" font-size="11" fill="#e0a33b">T20 · Gate B</text><line x1="397" x2="397" y1="16" y2="226" stroke="#e0a33b" stroke-dasharray="3 4"/><text x="397" y="242" text-anchor="middle" font-size="11" fill="#e0a33b">T25 · Gate B</text><line x1="536" x2="536" y1="16" y2="226" stroke="#e0a33b" stroke-dasharray="3 4"/><text x="536" y="242" text-anchor="middle" font-size="11" fill="#e0a33b">T35 · Gate C</text><line x1="550" x2="550" y1="16" y2="226" stroke="#e0a33b" stroke-dasharray="3 4"/><text x="550" y="242" text-anchor="middle" font-size="11" fill="#e0a33b">T36 · Gate A</text>
+  <polyline points="64.0,225.3 77.9,224.2 91.8,222.6 105.6,220.6 119.5,216.9 133.4,213.1 147.3,209.3 161.1,205.5 175.0,201.6 188.9,197.8 202.8,193.9 216.7,190.0 230.5,186.0 244.4,182.1 258.3,178.1 272.2,174.1 286.0,170.1 299.9,166.1 313.8,162.0 327.7,157.9 341.6,153.8 355.4,149.7 369.3,145.6 383.2,141.4 397.1,137.2 410.9,133.0 424.8,128.8 438.7,124.5 452.6,120.3 466.4,116.0 480.3,111.7 494.2,107.4 508.1,103.0 522.0,98.6 535.8,94.2 549.7,89.6 563.6,84.5 577.5,79.3 591.3,74.2 605.2,69.0 619.1,63.8 633.0,58.6 646.9,53.3 660.7,48.0 674.6,42.8 688.5,37.4 702.4,32.1 716.2,26.8 730.1,21.4 744.0,16.0" fill="none" stroke="#e25d5d" stroke-width="2.5"/>
+  <polyline points="64.0,225.5 77.9,225.1 91.8,224.7 105.6,224.4 119.5,224.0 133.4,223.5 147.3,223.0 161.1,222.6 175.0,222.3 188.9,221.9 202.8,221.3 216.7,220.8 230.5,220.4 244.4,220.1 258.3,219.6 272.2,219.0 286.0,218.6 299.9,218.1 313.8,217.8 327.7,217.0 341.6,216.4 355.4,215.9 369.3,215.5 383.2,215.1 397.1,214.2 410.9,213.7 424.8,213.2 438.7,212.8 452.6,212.4 466.4,211.9 480.3,211.3 494.2,210.7 508.1,210.2 522.0,209.8 535.8,209.0 549.7,208.7 563.6,208.1 577.5,207.6 591.3,207.2 605.2,206.7 619.1,206.0 633.0,205.5 646.9,204.9 660.7,204.5 674.6,204.0 688.5,203.3 702.4,202.7 716.2,202.2 730.1,201.7 744.0,201.2" fill="none" stroke="#3fb87f" stroke-width="2.5"/>
+  <text x="744" y="8" text-anchor="end" font-size="12"
+        fill="#e25d5d">raw re-read baseline (cache-cliff billed)</text>
+  <text x="744" y="219" text-anchor="end" font-size="12"
+        fill="#3fb87f">StepCheck compacted (focused checkouts + folded patches)</text>
+</svg></figure>
+
+<h2>Gate catches</h2>
+<table>
+<tr><th>Turn</th><th>Node</th><th>Gate</th><th>Subtype / event</th><th>Detail</th></tr>
+<tr><td>T5</td><td><code>core</code></td><td class='g'>—</td><td><code>LOCKED by user</code></td><td></td></tr><tr><td>T20</td><td><code>payments</code></td><td class='gB'>Gate B</td><td><code>INTRA_NODE_SYMBOL_DROPPED</code></td><td>preserved symbol '@audit' of 'payments' was silently dropped from the staged source</td></tr><tr><td>T25</td><td><code>payments</code></td><td class='gB'>Gate B · propagation (accepted)</td><td><code>INTER_NODE_DIRTY</code></td><td>exported signature changed → api, workers now DIRTY_OMISSION_RISK; finalize_session blocked until re-verified</td></tr><tr><td>T35</td><td><code>payments</code></td><td class='gC'>Gate C</td><td><code></code></td><td>staged diff violates frame invariant 'call:charge(account="x", amount_cents=0) raises ValueError' of 'payments' (auto-mined from a leading guard clause)</td></tr><tr><td>T36</td><td><code>core</code></td><td class='gA'>Gate A</td><td><code></code></td><td>node 'core' is LOCKED — mutations are rejected at Gate A</td></tr>
+</table>
+
+<h2>What the upgrade pass changed</h2>
+<table>
+<tr><th>Caveat (v1)</th><th>Resolution</th></tr>
+<tr><td>Gate C invariants were string containment over raw source — brittle to
+    whitespace, blind to semantics.</td>
+    <td>Invariants now evaluate against <code>src</code> =
+    <code>ast.unparse(tree)</code> (normalized, comment-free, self-reference-proof),
+    <code>tree</code> (the <code>ast.Module</code>) and <code>ns</code> (the staged
+    module exec-loaded into an isolated namespace with project imports resolved to
+    canonical sources). Sugar: <code>call:charge("acct", 0) raises ValueError</code>.
+    Legacy string invariants are unchanged and now whitespace-proof.</td></tr>
+<tr><td>Compacted tokens reached 73k (45.3%): every commit re-sent the whole
+    module and every checkout dragged the full <code>verified[]</code> chain plus
+    data ballast.</td>
+    <td>Checkout takes <code>focus=[…]</code>: focused defs verbatim, the rest of the
+    target as an AST skeleton (signatures, decorators, docstrings, assignment runs
+    folded to one line); dependencies ship as interface skeletons. Commits take a
+    <code>patch</code> of AST ops (append / replace_symbol / delete_symbol) folded
+    into canonical state, and telemetry charges the patch, not the module.
+    Superseded attestations fold into one summary in the payload (the on-disk
+    frame keeps the full chain).</td></tr>
+</table>
+
+<h2>Kernel caveats closed in the hardening pass</h2>
+<table>
+<tr><th>Caveat (v2)</th><th>Resolution</th></tr>
+<tr><td>An unfocused <code>checkout(focus=None)</code> carried whole-module source
+    and could breach the &lt;4,000-token budget on large files.</td>
+    <td>When the unfocused frame would meet the budget, <code>checkout()</code> falls
+    back to a pure AST skeleton with a symbol index and sets
+    <code>auto_skeletonized=True</code>; the frame tells the agent to re-checkout with
+    <code>focus=[…]</code>. Small modules are untouched.</td></tr>
+<tr><td>Callable invariants executed staged code with no bound — a runaway loop
+    or recursion at Gate C could hang the kernel.</td>
+    <td>Namespace loading and every invariant evaluation run under a per-thread
+    trace guard (<code>_sandbox.guarded</code>): 200,000 line-event step budget,
+    0.5 s wall-clock backstop. Overrun is a deterministic <code>LogicalError</code>
+    naming the invariant; <code>RecursionError</code> simply fails the invariant.
+    The kernel stays healthy and the next correct diff passes.</td></tr>
+</table>
+
+<h2>Packaging</h2>
+<p>One port now serves everything: <code>stepcheck up</code> mounts the compiled
+Studio at <code>/studio</code> (SPA deep links fall back to <code>index.html</code>,
+missing hashed assets still 404) beside Door 1, <code>/v1/step/*</code>,
+Streamable&nbsp;HTTP MCP at <code>/mcp</code> and <code>WS /v1/ws/*</code>.
+<code>stepcheck benchmark</code>, <code>stepcheck review</code> and
+<code>stepcheck preview</code> regenerate the numbers, this report and the
+self-contained <code>stepcheck-studio-preview.html</code> replay.</p>
+
+<h2>Risks worth watching</h2>
+<p>The execution guard bounds time, not capability: callable invariants still run
+the agent's staged code in-process with real imports, so run the kernel in a
+container when agents are untrusted. The WS fan-out is in-process; multi-worker
+deployment needs a shared bus.</p>
+</main></body></html>

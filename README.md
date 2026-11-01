@@ -1,0 +1,72 @@
+# StepCheck Dev
+
+Deterministic Anti-Context-Rot State Engine · BYOK Token-Firewall Proxy ·
+Streamable HTTP MCP Server · Split-Pane Visual Workspace.
+Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
+| `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run), Door 2 REST `/v1/step/*` + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
+| `backend/tests/` | 59 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate) |
+| `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
+| `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
+| `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.2% tokens saved) + review generator |
+| `architecture-review.html` | Generated visual report |
+| `stepcheck-studio-preview.html` | Zero-dependency interactive replay of the 50-turn run (turn scrubber, graph, patch diff, attestation, cost curve) |
+| `backend/cli.py` + `pyproject.toml` | `stepcheck up / benchmark / review / preview / audit` |
+| `backend/audit.py` | `stepcheck audit [path]`: reads Claude Code `~/.claude/projects/*.jsonl`, receipts cache-cliff waste vs skeleton checkouts and dropped-decorator/guard edits + their retry loops → `stepcheck-audit.html` (falls back to `benchmarks/fixtures/sample_session.jsonl`) |
+| `CLAUDE.md` → `.cursorrules` | Agent rules: enforces the StepCheck MCP workflow (init → focused checkout → patch commit → omission check + savings) in Claude Code and Cursor |
+
+## Run (turnkey)
+
+```bash
+pip install -e .            # installs the `stepcheck` CLI
+(cd frontend && npm install && npm run build)   # once: compiled Studio served at /studio
+stepcheck up                # one port (:8420): Studio UI + Door 1 proxy + REST + MCP + WS
+stepcheck benchmark         # 50-turn coding-rot benchmark
+stepcheck review            # architecture-review.html
+stepcheck preview           # stepcheck-studio-preview.html (self-contained replay)
+stepcheck audit             # audit your own Claude Code sessions → stepcheck-audit.html
+```
+
+## Run (development)
+
+```bash
+# backend + tests
+cd backend && pip install -r requirements.txt && python -m pytest -q
+python server.py                         # gateway on :8420 (PORT overrides)
+
+# frontend
+cd frontend && npm install && npm run dev   # Studio on :5173
+# open http://localhost:5173/?session=<session_id from POST /v1/step/init>
+
+# benchmark + report
+python3 benchmarks/coding_rot_benchmark.py
+python3 benchmarks/generate_review.py
+
+# extension (compile check; load the folder via VS Code "Run Extension")
+cd extension && npm install && npm run compile
+```
+
+## Door 1 in one call
+
+```bash
+SID=$(curl -s localhost:8420/v1/step/init -d '{"project_root":"/path/to/project"}' \
+      -H 'content-type: application/json' | jq -r .session_id)
+curl -s localhost:8420/v1/messages \
+  -H "x-stepcheck-session: $SID" -H "x-stepcheck-node: billing" \
+  -H 'content-type: application/json' \
+  -d '{"model":"claude-sonnet-4-5","max_tokens":512,"messages":[...]}'
+# add x-api-key + x-stepcheck-upstream (or STEPCHECK_UPSTREAM_BASE) to forward BYOK;
+# without them you get the deterministic dry-run with stepcheck.sent_messages.
+```
+
+## Testing rules (skill precedence)
+
+`tdd` + `codebase-design` override `python-testing-patterns` on mocking: never
+mock internal modules, AST parsers, YAML validators, or hash functions. Tests
+hit Seam 1 / Seam 2 only, against concrete non-tautological fixtures
+(hand-written projects, hand-calculated telemetry numbers).
