@@ -196,14 +196,29 @@ def index_markdown(nodes: dict[str, "object"]) -> str:
     )
 
 
-def write_frames(okf_dir: Path, nodes: dict[str, "object"]) -> None:
+def write_frames(
+    okf_dir: Path, nodes: dict[str, "object"], written: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Write one frame per node plus index.md. Returns {node_id | '__index__':
+    sha256 of the frame text}; pass that back as `written` on the next call and
+    frames whose text did not change are left alone (no disk write)."""
+    import hashlib
+
     okf_dir.mkdir(parents=True, exist_ok=True)
-    for nid, node in nodes.items():
-        (okf_dir / f"{nid}.md").write_text(
-            frame_markdown(node.info, node.status, node.locked, node.verified),
-            encoding="utf-8",
-        )
-    (okf_dir / "index.md").write_text(index_markdown(nodes), encoding="utf-8")
+    previous = written or {}
+    pages = {
+        nid: frame_markdown(node.info, node.status, node.locked, node.verified)
+        for nid, node in nodes.items()
+    }
+    pages["__index__"] = index_markdown(nodes)
+    shas: dict[str, str] = {}
+    for key, text in pages.items():
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        shas[key] = digest
+        if previous.get(key) != digest:
+            name = "index.md" if key == "__index__" else f"{key}.md"
+            (okf_dir / name).write_text(text, encoding="utf-8")
+    return shas
 
 
 # ---------------------------------------------------- tracked-file round trip
@@ -525,17 +540,24 @@ def _package_of(path: str) -> str:
 
 
 def module_map(paths: dict[str, str]) -> dict[str, str]:
-    """Importable dotted names -> node_id. A stem that is unique in the project
-    stays importable by its bare name (flat, sys.path-style projects)."""
+    """Importable dotted names -> node_id.
+
+    Root-relative names always resolve (`backend.kernel`). Two kinds of alias
+    resolve too, but only while unambiguous across the project: the name with
+    its first directory stripped — the conventional source roots `src/`,
+    `backend/`, … that land on sys.path, so `backend/kernel/__init__.py` is
+    also `kernel` — and the bare stem (flat, sys.path-style projects). A
+    root-relative name always beats an alias of the same spelling."""
     out = {module_name(p): nid for nid, p in paths.items()}
-    stems: dict[str, int] = {}
-    for p in paths.values():
-        stem = p.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".py")
-        stems[stem] = stems.get(stem, 0) + 1
+    candidates: dict[str, set[str]] = {}
     for nid, p in paths.items():
-        stem = p.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".py")
-        if stems[stem] == 1:
-            out.setdefault(stem, nid)
+        parts = p.replace("\\", "/").split("/")
+        if len(parts) > 1:
+            candidates.setdefault(module_name("/".join(parts[1:])), set()).add(nid)
+        candidates.setdefault(parts[-1].removesuffix(".py"), set()).add(nid)
+    for name, nids in candidates.items():
+        if len(nids) == 1:
+            out.setdefault(name, next(iter(nids)))
     return out
 
 

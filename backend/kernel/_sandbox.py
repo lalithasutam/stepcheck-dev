@@ -48,27 +48,31 @@ def load_namespace(
 ) -> dict:
     """Return the module namespace of `source` with project imports resolved.
 
-    `project_paths` (node_id -> file path) turns node ids into import names, so
-    `pkg/__init__.py` loads as package `pkg` and `from . import sibling` inside
-    it resolves to the sibling's canonical source; parents without their own
-    `__init__.py` become empty namespace packages. Without it every node is a
-    flat top-level module named after its id. Real modules that share a name
-    are shadowed only while loading and restored afterwards."""
+    `project_paths` (node_id -> file path) turns node ids into import names
+    through _okf.module_map, so `pkg/__init__.py` loads as package `pkg`,
+    `from . import sibling` inside it resolves to the sibling's canonical
+    source, and source-root aliases work too: `from kernel import X` inside
+    `backend/server.py` binds the canonical `backend/kernel/__init__.py`, not
+    whatever sys.path holds. Parents without their own `__init__.py` become
+    empty namespace packages. Without paths every node is a flat top-level
+    module named after its id. Real modules that share a name are shadowed
+    only while loading and restored afterwards."""
     from . import _okf
 
-    paths = project_paths or {}
-
-    def name(nid: str) -> str:
-        return _okf.module_name(paths[nid]) if nid in paths else nid
-
-    sources = {name(nid): src for nid, src in project_sources.items()}
-    target = name(node_id)
-    sources[target] = source
-    packages = {
-        name(nid)
-        for nid, p in paths.items()
-        if p.replace("\\", "/").rsplit("/", 1)[-1] == "__init__.py"
+    paths = dict(project_paths or {})
+    by_node = dict(project_sources)
+    by_node[node_id] = source
+    if paths:
+        names = _okf.module_map({nid: p for nid, p in paths.items() if nid in by_node})
+    else:
+        names = {nid: nid for nid in by_node}
+    sources = {name: by_node[nid] for name, nid in names.items()}
+    target = _okf.module_name(paths[node_id]) if node_id in paths else node_id
+    sources.setdefault(target, source)
+    inits = {
+        nid for nid, p in paths.items() if p.replace("\\", "/").rsplit("/", 1)[-1] == "__init__.py"
     }
+    packages = {name for name, nid in names.items() if nid in inits}
     for mod in list(sources):
         parts = mod.split(".")
         for i in range(1, len(parts)):

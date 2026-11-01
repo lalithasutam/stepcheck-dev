@@ -154,6 +154,10 @@ class _Session:
     events: list[dict] = field(default_factory=list)
     omissions_blocked: int = 0
     scratchpad: list[dict] = field(default_factory=list)
+    # Not persisted: sha256 of what this process last wrote, so unchanged
+    # frames / session files are not rewritten.
+    frame_shas: dict[str, str] = field(default_factory=dict)
+    persisted_sha: str = ""
 
 
 class StateKernel:
@@ -407,7 +411,8 @@ class StateKernel:
 
     def _land(self, s: _Session, node: _Node, source: str) -> str:
         """Write gate-approved `source` to the tracked file; return the SHA-256 of
-        the bytes written. Refuses to overwrite edits the kernel has not seen."""
+        the bytes on disk. Refuses to overwrite edits the kernel has not seen and
+        leaves the file alone (no write, no mtime churn) when the bytes are equal."""
         path = s.root / node.info.path
         try:
             existing = path.read_bytes()
@@ -417,7 +422,8 @@ class StateKernel:
                     f"— open a new session to pick up those edits"
                 )
             data = _okf.encode_like(source, existing)
-            _okf.write_atomic(path, data)
+            if data != existing:
+                _okf.write_atomic(path, data)
         except (OSError, UnicodeError) as exc:
             raise MechanicalError(f"could not write '{node.info.path}': {exc}")
         node.disk_sha256 = _sha256(data)
@@ -496,7 +502,7 @@ class StateKernel:
         return _okf.module_map({nid: n.info.path for nid, n in s.nodes.items()})
 
     def _registry(self) -> dict[str, str]:
-        """session_id -> project root for every session this user has opened."""
+        """session_id -> project root: the only thing the per-user index holds."""
         data = _read_json(_state_home() / "sessions.json")
         return {sid: root for sid, root in data.items() if isinstance(root, str)}
 
@@ -510,12 +516,17 @@ class StateKernel:
         _write_json(_state_home() / "sessions.json", registry)
 
     def _persist(self, s: _Session) -> None:
-        _write_json(
-            s.root / ".stepcheck" / "sessions" / f"{s.session_id}.json", _session_to_json(s)
-        )
+        """Session payload -> `<root>/.stepcheck/sessions/<id>.json`, skipped when
+        the bytes equal what this process last wrote."""
+        data = json.dumps(_session_to_json(s), ensure_ascii=False).encode("utf-8")
+        digest = _sha256(data)
+        if digest == s.persisted_sha:
+            return
+        _okf.write_atomic(s.root / ".stepcheck" / "sessions" / f"{s.session_id}.json", data)
+        s.persisted_sha = digest
 
     def _flush(self, s: _Session) -> None:
-        _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes)
+        s.frame_shas = _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes, s.frame_shas)
         self._persist(s)
 
 

@@ -5,7 +5,7 @@ Every number below is read from the repo as it stands, not rounded up:
 | Metric | Value | Source |
 | --- | --- | --- |
 | Kernel + gateway | see `wc -l backend/kernel/*.py backend/server.py` (≈1,900 LOC after the mining + audit pass) | `wc -l` |
-| Tests | 71, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~3–14 s depending on OS (includes the live 50-turn benchmark gate and a real uvicorn MCP round-trip) | `python -m pytest -q` |
+| Tests | 82, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~3–14 s depending on OS (includes the live 50-turn benchmark gate and a real uvicorn MCP round-trip) | `python -m pytest -q` |
 | 50-turn benchmark | 132,779 raw → 15,662 compacted tokens, 88.2% saved, $0.3514 at $3.00/MTok | `benchmarks/results.json` |
 | Real-log audit | 116 Claude Code sessions, 5,330 assistant turns, 67 cache-cliff resumes re-writing 4,950,678 tokens, $13.37 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
@@ -126,13 +126,15 @@ Link straight to a moment with the hash: `#t20`, `#t25`, `#t35`, `#t36`. Regener
 ```bash
 cd stepcheck-dev && pip install -e . && (cd frontend && npm install && npm run build) && (cd backend && python -m pytest -q) && stepcheck up
 ```
-Expect `71 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
+Expect `82 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
 
 **2. Connect Claude Code (or Cursor) to the MCP server** (second terminal)
 ```bash
 claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/ && claude
 ```
 In the session: ask it to call `init_project_session` on a Python repo path, then `checkout_context_frame` with a focus and `commit_verified_step` with a patch. For Cursor, put `{"mcpServers":{"stepcheck":{"url":"http://127.0.0.1:8420/mcp/"}}}` in `.cursor/mcp.json` instead.
+
+**2a. Gate a PR headlessly** — `stepcheck ci backend` re-runs every module through Gates A/B/C, executes all mined and hand-written invariants, and refuses attestation drift or `DIRTY_OMISSION_RISK` nodes with exit 1; `.github/workflows/ci.yml` does this on Ubuntu + Windows for every push and PR.
 
 **2b. Audit your own sessions (30 seconds, no setup)**
 ```bash

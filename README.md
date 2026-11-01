@@ -10,13 +10,13 @@ Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run), Door 2 REST `/v1/step/*` + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 71 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate) |
+| `backend/tests/` | 82 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.2% tokens saved) + review generator |
 | `architecture-review.html` | Generated visual report |
 | `stepcheck-studio-preview.html` | Zero-dependency interactive replay of the 50-turn run (turn scrubber, graph, patch diff, attestation, cost curve) |
-| `backend/cli.py` + `pyproject.toml` | `stepcheck up / benchmark / review / preview / audit` |
+| `backend/cli.py` + `pyproject.toml` | `stepcheck up / benchmark / review / preview / audit / ci` — `ci [path]` is the headless PR gatekeeper: every module must parse, match its DSSE attestation, hold no `DIRTY_OMISSION_RISK`, and pass Gates A/B/C with all invariants executed (exit 1 names the module and violation); `.github/workflows/ci.yml` runs it on Ubuntu + Windows |
 | `backend/audit.py` | `stepcheck audit [path]`: reads Claude Code `~/.claude/projects/*.jsonl`, receipts cache-cliff waste vs skeleton checkouts and dropped-decorator/guard edits + their retry loops → `stepcheck-audit.html` (falls back to `benchmarks/fixtures/sample_session.jsonl`) |
 | `CLAUDE.md` → `.cursorrules` | Agent rules: enforces the StepCheck MCP workflow (init → focused checkout → patch commit → omission check + savings) in Claude Code and Cursor |
 
@@ -30,6 +30,7 @@ stepcheck benchmark         # 50-turn coding-rot benchmark
 stepcheck review            # architecture-review.html
 stepcheck preview           # stepcheck-studio-preview.html (self-contained replay)
 stepcheck audit             # audit your own Claude Code sessions → stepcheck-audit.html
+stepcheck ci backend        # headless gate: parse + attestations + Gates A/B/C for every module (CI/PR)
 ```
 
 ## Run (development)

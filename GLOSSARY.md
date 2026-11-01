@@ -24,7 +24,11 @@ their dotted relative path (`kernel.__init__`, `other.models`). `deps[]` are res
 packages: absolute and relative imports (`from . import _gates`, `from kernel import StateKernel`)
 both land on the right node, and Gate A checks the names a dependent imports against the staged
 module's top-level bindings. Gate C loads a package module as a package, so its relative imports
-resolve to canonical sources.
+resolve to canonical sources. **Source roots:** a session rooted at the repository also resolves
+names relative to a first-level directory that code puts on `sys.path` (`src/`, `backend/`): with
+the root at the repo, `from kernel import StateKernel` in `backend/server.py` still resolves to
+`backend/kernel/__init__.py`, and the Gate C sandbox binds that alias to the canonical source. An
+alias only resolves while it is unambiguous; a root-relative name always wins over an alias.
 
 **Session persistence** — Every session is written to `<root>/.stepcheck/sessions/<session_id>.json`
 on each state change and indexed in `~/.stepcheck/sessions.json` (`STEPCHECK_HOME` overrides the
