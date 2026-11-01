@@ -163,7 +163,7 @@ class StateKernel:
     # -- Seam 1 -----------------------------------------------------------
 
     def init_session(self, project_root: str | Path) -> str:
-        root = Path(project_root)
+        root = Path(project_root).resolve()
         files = sorted(
             p
             for p in root.rglob("*.py")
@@ -176,14 +176,28 @@ class StateKernel:
                 loaded[p] = (_okf.decode_source(raw), raw)
             except UnicodeDecodeError:
                 continue  # not UTF-8: leave untracked, write-back could not round-trip it
-        module_names = {p.stem for p in loaded}
+        # A flat stem stays the node id while it is unique in the project; stems
+        # that collide (several __init__.py, pkg/models.py + other/models.py)
+        # use their dotted relative path instead of overwriting each other.
+        stems: dict[str, int] = {}
+        for p in loaded:
+            stems[p.stem] = stems.get(p.stem, 0) + 1
+        rel = {p: str(p.relative_to(root)) for p in loaded}
+        ids = {
+            p: p.stem
+            if stems[p.stem] == 1
+            else rel[p].replace("\\", "/").removesuffix(".py").replace("/", ".")
+            for p in loaded
+        }
+        modules = _okf.module_map({ids[p]: rel[p] for p in loaded})
         nodes: dict[str, _Node] = {}
         for p, (text, raw) in loaded.items():
-            info = _okf.analyze(p.stem, str(p.relative_to(root)), text, module_names)
+            info = _okf.analyze(ids[p], rel[p], text, modules)
             nodes[info.node_id] = _Node(info=info, disk_sha256=_sha256(raw))
         session_id = f"sk-{uuid.uuid4().hex[:12]}"
         session = _Session(session_id=session_id, root=root, nodes=nodes)
         self._sessions[session_id] = session
+        self._register(session)
         self._flush(session)
         return session_id
 
@@ -238,6 +252,7 @@ class StateKernel:
                 "at": at,
             }
         )
+        self._persist(s)
         return CheckoutPayload(
             session_id=session_id,
             node_id=node_id,
@@ -280,7 +295,7 @@ class StateKernel:
         except MechanicalError as exc:
             return self._reject(s, node, "A", exc)
 
-        staged_info = _okf.analyze(node_id, node.info.path, source, set(s.nodes))
+        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s))
         try:
             _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion)
         except OmissionError as exc:
@@ -300,6 +315,7 @@ class StateKernel:
                 source,
                 {nid: n.info.source for nid, n in s.nodes.items() if nid != node_id},
                 mined=node.info.mined_invariants,
+                project_paths={nid: n.info.path for nid, n in s.nodes.items()},
             )
         except LogicalError as exc:
             return self._reject(s, node, "C", exc)
@@ -312,17 +328,18 @@ class StateKernel:
 
     def record_draft(self, session_id: str, node_id: str, text: str) -> None:
         """Door-1 support: park an intermediate (unverified) agent turn."""
-        s = self._sessions[session_id]
+        s = self._session(session_id)
         s.scratchpad.append(
             {"node_id": node_id, "text": text, "tokens": _tokens.count(text)}
         )
+        self._persist(s)
 
     def drafts(self, session_id: str) -> list[dict]:
-        return list(self._sessions[session_id].scratchpad)
+        return list(self._session(session_id).scratchpad)
 
     def graph(self, session_id: str) -> dict:
         """Read-only OKF graph view for Seam 2 / the UI (nodes + edges)."""
-        s = self._sessions[session_id]
+        s = self._session(session_id)
         nodes = [
             {
                 "node_id": nid,
@@ -348,7 +365,7 @@ class StateKernel:
         return {"nodes": nodes, "edges": edges}
 
     def get_telemetry(self, session_id: str) -> Telemetry:
-        s = self._sessions[session_id]
+        s = self._session(session_id)
         raw, compacted, turns = _telemetry.compute(s.events)
         saved = raw - compacted
         return Telemetry(
@@ -361,7 +378,7 @@ class StateKernel:
         )
 
     def finalize_session(self, session_id: str) -> bool:
-        s = self._sessions[session_id]
+        s = self._session(session_id)
         dirty = sorted(n for n, node in s.nodes.items() if node.status == DIRTY)
         if dirty:
             raise OmissionError(
@@ -454,9 +471,120 @@ class StateKernel:
 
     # -- internals --------------------------------------------------------
 
+    def _session(self, session_id: str) -> _Session:
+        """The in-memory session, or one rehydrated from `<root>/.stepcheck/sessions/`
+        through the local registry; anything unknown is a KeyError (Seam 2: 404)."""
+        # okf-invariant: call:StateKernel().graph("nope") raises KeyError
+        s = self._sessions.get(session_id)
+        if s is not None:
+            return s
+        if not _is_session_id(session_id):
+            raise KeyError(session_id)
+        root = self._registry().get(session_id)
+        path = Path(root) / ".stepcheck" / "sessions" / f"{session_id}.json" if root else None
+        if path is None or not path.is_file():
+            raise KeyError(session_id)
+        s = _session_from_json(_read_json(path))
+        self._sessions[session_id] = s
+        return s
+
     def _get(self, session_id: str, node_id: str) -> tuple[_Session, _Node]:
-        s = self._sessions[session_id]
+        s = self._session(session_id)
         return s, s.nodes[node_id]
+
+    def _modules(self, s: _Session) -> dict[str, str]:
+        return _okf.module_map({nid: n.info.path for nid, n in s.nodes.items()})
+
+    def _registry(self) -> dict[str, str]:
+        """session_id -> project root for every session this user has opened."""
+        data = _read_json(_state_home() / "sessions.json")
+        return {sid: root for sid, root in data.items() if isinstance(root, str)}
+
+    def _register(self, s: _Session) -> None:
+        registry = {
+            sid: root
+            for sid, root in self._registry().items()
+            if (Path(root) / ".stepcheck" / "sessions" / f"{sid}.json").is_file()
+        }
+        registry[s.session_id] = str(s.root)
+        _write_json(_state_home() / "sessions.json", registry)
+
+    def _persist(self, s: _Session) -> None:
+        _write_json(
+            s.root / ".stepcheck" / "sessions" / f"{s.session_id}.json", _session_to_json(s)
+        )
 
     def _flush(self, s: _Session) -> None:
         _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes)
+        self._persist(s)
+
+
+# -------------------------------------------------------- session persistence
+
+
+def _state_home() -> Path:
+    """Per-user registry location; STEPCHECK_HOME overrides it (tests, CI)."""
+    import os
+
+    return Path(os.environ.get("STEPCHECK_HOME") or Path.home() / ".stepcheck")
+
+
+def _is_session_id(session_id: object) -> bool:
+    import re
+
+    return isinstance(session_id, str) and re.fullmatch(r"sk-[0-9a-f]{12}", session_id) is not None
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(path: Path, data: dict) -> None:
+    _okf.write_atomic(path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+
+def _session_to_json(s: _Session) -> dict:
+    import dataclasses
+
+    return {
+        "session_id": s.session_id,
+        "root": str(s.root),
+        "nodes": {
+            nid: {
+                "info": dataclasses.asdict(n.info),
+                "status": n.status,
+                "locked": n.locked,
+                "verified": n.verified,
+                "disk_sha256": n.disk_sha256,
+            }
+            for nid, n in s.nodes.items()
+        },
+        "events": s.events,
+        "omissions_blocked": s.omissions_blocked,
+        "scratchpad": s.scratchpad,
+    }
+
+
+def _session_from_json(data: dict) -> _Session:
+    nodes = {
+        nid: _Node(
+            info=_okf.ModuleInfo(**n["info"]),
+            status=n["status"],
+            locked=n["locked"],
+            verified=list(n["verified"]),
+            disk_sha256=n.get("disk_sha256", ""),
+        )
+        for nid, n in data["nodes"].items()
+    }
+    return _Session(
+        session_id=data["session_id"],
+        root=Path(data["root"]),
+        nodes=nodes,
+        events=list(data.get("events", [])),
+        omissions_blocked=int(data.get("omissions_blocked", 0)),
+        scratchpad=list(data.get("scratchpad", [])),
+    )

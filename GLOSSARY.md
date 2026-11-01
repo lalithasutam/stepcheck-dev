@@ -18,6 +18,19 @@ edge) plus one OKFFrame per module, linked by `deps[]`. It is a DAG over `node_i
 cycle collapses into mutual dep edges (no dirty-propagation infinite loops: propagation visits
 each node once).
 
+**node_id** — A module's file stem while that stem is unique in the project (`billing`); when
+stems collide (several `__init__.py`, `pkg/models.py` + `other/models.py`) the colliding files use
+their dotted relative path (`kernel.__init__`, `other.models`). `deps[]` are resolved through
+packages: absolute and relative imports (`from . import _gates`, `from kernel import StateKernel`)
+both land on the right node, and Gate A checks the names a dependent imports against the staged
+module's top-level bindings. Gate C loads a package module as a package, so its relative imports
+resolve to canonical sources.
+
+**Session persistence** — Every session is written to `<root>/.stepcheck/sessions/<session_id>.json`
+on each state change and indexed in `~/.stepcheck/sessions.json` (`STEPCHECK_HOME` overrides the
+directory). A fresh `StateKernel` (a gateway restart) rehydrates a known `session_id` on first use;
+an unknown or malformed id is a `KeyError` (404 at Seam 2).
+
 **StateKernel** — The single deep module behind Seam 1. Owns OKF compilation, sessions,
 checkout/commit, the three gates, locking, attestation, and telemetry. Everything else in
 `backend/kernel/` is private implementation (`_`-prefixed modules), not interface.

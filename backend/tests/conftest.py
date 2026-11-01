@@ -100,3 +100,9 @@ def kernel():
     from kernel import StateKernel
 
     return StateKernel()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_stepcheck_home(tmp_path, monkeypatch):
+    """Keep the session registry out of the developer's real ~/.stepcheck."""
+    monkeypatch.setenv("STEPCHECK_HOME", str(tmp_path / ".stepcheck-home"))

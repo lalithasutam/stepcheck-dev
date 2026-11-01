@@ -7,15 +7,29 @@ import re
 
 
 def required_export_names(dependent_source: str, target_module: str) -> set[str]:
-    """Names a dependent imports from `target_module` (its mechanical contract)."""
+    """Names a flat dependent imports from `target_module` (its mechanical contract).
+    Package-aware resolution lives in _okf.resolve_imports; this keeps the flat form."""
+    from . import _okf
+
+    return _okf.resolve_imports(
+        "<dependent>", "<dependent>.py", dependent_source, {target_module: target_module}
+    ).get(target_module, set())
+
+
+def _bound_names(tree: ast.Module) -> set[str]:
+    """Every name bound at module top level: defs, classes, assignments, imports."""
     names: set[str] = set()
-    try:
-        tree = ast.parse(dependent_source)
-    except SyntaxError:
-        return names
     for stmt in tree.body:
-        if isinstance(stmt, ast.ImportFrom) and (stmt.module or "").split(".")[0] == target_module:
-            names.update(alias.name for alias in stmt.names)
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(stmt.name)
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            for t in targets:
+                names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+        elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            for alias in stmt.names:
+                if alias.name != "*":
+                    names.add(alias.asname or alias.name.split(".")[0])
     return names
 
 
@@ -60,8 +74,9 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
 def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     """Mechanical & locked protection. Returns the parsed tree on pass.
 
-    Raises kernel.MechanicalError on: locked mutation, syntax error, or an
-    exported name required by a dependent going missing.
+    Raises kernel.MechanicalError on: locked mutation, syntax error, or a name a
+    dependent imports from this module (absolute or relative, through packages)
+    going missing from the staged module's top level.
     """
     from . import MechanicalError, _okf  # local import: avoid cycle at module load
 
@@ -74,14 +89,17 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     except SyntaxError as exc:
         raise MechanicalError(f"invalid AST syntax in '{node_id}': {exc.msg} (line {exc.lineno})")
 
-    new_exports = export_names(
-        _okf.analyze(node_id, "<staged>", source, set(nodes)).exports
-    )
+    paths = {nid: n.info.path for nid, n in nodes.items()}
+    modules = _okf.module_map(paths)
+    staged = _okf.analyze(node_id, paths.get(node_id, f"{node_id}.py"), source, modules)
+    bound = export_names(staged.exports) | _bound_names(tree)
     for dep_id, dep_node in nodes.items():
-        if node_id not in dep_node.info.deps:
+        if dep_id == node_id or node_id not in dep_node.info.deps:
             continue
-        required = required_export_names(dep_node.info.source, node_id)
-        missing = sorted(required - new_exports)
+        required = _okf.resolve_imports(
+            dep_id, dep_node.info.path, dep_node.info.source, modules
+        ).get(node_id, set())
+        missing = sorted(required - bound)
         if missing:
             raise MechanicalError(
                 f"export '{missing[0]}' of '{node_id}' is required by dependent "
@@ -104,7 +122,11 @@ def _fill_new_required(expr: str, tree: ast.Module) -> str:
     if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
         return expr
     fn = next(
-        (s for s in tree.body if isinstance(s, ast.FunctionDef) and s.name == call.func.id),
+        (
+            s
+            for s in tree.body
+            if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and s.name == call.func.id
+        ),
         None,
     )
     if fn is None:
@@ -133,7 +155,7 @@ def _raises(fn, exc_name: str, ns: dict) -> bool:
     if not isinstance(exc_type, type):
         raise NameError(f"unknown exception type {exc_name!r}")
     try:
-        fn()
+        _complete(fn())  # an `async def` hands back a coroutine: run it so its guard fires
     except _sandbox.ExecutionBudgetExceeded:
         raise
     except exc_type:
@@ -143,12 +165,51 @@ def _raises(fn, exc_name: str, ns: dict) -> bool:
     return False
 
 
+def _complete(value):
+    """Run an awaitable to completion and return its result; plain values pass
+    through. Uses a private event loop. When this thread already runs a loop (the
+    gateway's), the private loop runs on a helper thread under its own execution
+    guard, because event loops cannot nest."""
+    import asyncio
+    import inspect
+    import threading
+
+    from . import _sandbox
+
+    if not inspect.isawaitable(value):
+        return value
+
+    async def main():
+        return await value
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(main())
+
+    box: dict = {}
+
+    def worker() -> None:
+        try:
+            box["value"] = _sandbox.guarded(lambda: asyncio.run(main()))
+        except BaseException as exc:  # re-raised on the caller's thread
+            box["error"] = exc
+
+    thread = threading.Thread(target=worker, name="stepcheck-await", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def gate_c(
     node_id: str,
     invariants: list[str],
     staged_source: str,
     project_sources: dict[str, str] | None = None,
     mined: list[str] | None = None,
+    project_paths: dict[str, str] | None = None,
 ) -> None:
     """Logical micro-invariants: every standing frame invariant must hold.
 
@@ -158,9 +219,11 @@ def gate_c(
              invariant can never satisfy itself and never trips on formatting;
       tree — the parsed `ast.Module`;
       ns   — the staged module exec-loaded into an isolated namespace, with
-             project imports resolved to canonical sources (loaded lazily, only
-             when an invariant mentions `ns` or uses the `call:` form);
-      ast, raises(fn, ExcName) — helpers.
+             project imports — absolute or relative; `project_paths` gives each
+             node's file so packages resolve — bound to canonical sources
+             (loaded lazily, only when an invariant mentions `ns` or uses `call:`);
+      ast, raises(fn, ExcName) — helpers; an awaitable result is run to
+             completion, so `async def` functions are checked like sync ones.
     Sugar: `call:<expr> raises <Exc>` ≡ `raises(lambda: <expr>, "<Exc>")`
     with `<expr>` evaluated inside `ns`. Auto-mined `call:` invariants also get
     typed mocks for any required parameters the staged signature added.
@@ -175,7 +238,9 @@ def gate_c(
     if needs_ns:
         try:
             ns = _sandbox.guarded(
-                lambda: _sandbox.load_namespace(node_id, staged_source, project_sources or {})
+                lambda: _sandbox.load_namespace(
+                    node_id, staged_source, project_sources or {}, project_paths
+                )
             )
         except _sandbox.ExecutionBudgetExceeded as exc:
             raise LogicalError(

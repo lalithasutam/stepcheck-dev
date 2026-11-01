@@ -51,12 +51,14 @@ def harvest_invariants(source: str) -> list[str]:
     return found
 
 
-def analyze(node_id: str, path: str, source: str, project_modules: set[str]) -> ModuleInfo:
-    """Parse one module into its OKF facts. Raises SyntaxError on broken source."""
+def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str]) -> ModuleInfo:
+    """Parse one module into its OKF facts. Raises SyntaxError on broken source.
+    `project_modules` maps importable dotted names to node ids (see module_map);
+    a plain set of flat module names is accepted for backwards compatibility."""
     tree = ast.parse(source)
+    modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
     preserved: list[str] = []
-    deps: set[str] = set()
 
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -73,24 +75,12 @@ def analyze(node_id: str, path: str, source: str, project_modules: set[str]) -> 
                 bases = ", ".join(ast.unparse(b) for b in stmt.bases)
                 exports.append(f"class {stmt.name}({bases})" if bases else f"class {stmt.name}")
                 preserved.append(f"class {stmt.name}")
-        elif isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                root = alias.name.split(".")[0]
-                if root in project_modules and root != node_id:
-                    deps.add(root)
-        elif isinstance(stmt, ast.ImportFrom):
-            root = (stmt.module or "").split(".")[0]
-            if root in project_modules and root != node_id:
-                deps.add(root)
+
+    records = _import_records(node_id, path, tree, modules)
+    deps = sorted({nid for nid, _name, _local in records})
 
     # Internal calls into project dependencies are preserved symbols too.
-    imported_names = {
-        alias.asname or alias.name
-        for stmt in tree.body
-        if isinstance(stmt, ast.ImportFrom)
-        and (stmt.module or "").split(".")[0] in project_modules
-        for alias in stmt.names
-    }
+    imported_names = {local for _nid, _name, local in records if local}
     called = {
         n.func.id
         for n in ast.walk(tree)
@@ -110,7 +100,7 @@ def analyze(node_id: str, path: str, source: str, project_modules: set[str]) -> 
         path=path,
         source=source,
         exports=exports,
-        deps=sorted(deps),
+        deps=deps,
         preserved_symbols=preserved,
         invariants=invariants,
         mined_invariants=mined,
@@ -233,12 +223,14 @@ def encode_like(source: str, existing: bytes) -> bytes:
 
 
 def write_atomic(path: Path, data: bytes) -> None:
-    """Replace `path` in one step so a crash cannot leave a half-written module."""
+    """Replace `path` in one step so a crash cannot leave a half-written file."""
     target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".stepcheck-tmp")
     try:
         tmp.write_bytes(data)
-        shutil.copymode(target, tmp)
+        if target.exists():
+            shutil.copymode(target, tmp)
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
@@ -247,16 +239,23 @@ def write_atomic(path: Path, data: bytes) -> None:
 # ----------------------------------------------------- AST skeleton slicing
 
 
-def _segment(source_lines: list[str], node: ast.stmt) -> str:
-    """Exact source text of a top-level statement, decorators + comments included."""
+def _symbol_span(source_lines: list[str], node: ast.stmt) -> tuple[int, int]:
+    """1-based inclusive line range of a top-level statement: its decorators plus
+    the comment lines sitting directly above (an `# okf-invariant:` travels with
+    its def). This is the range a focused checkout shows and a patch replaces."""
     start = node.lineno
     decos = getattr(node, "decorator_list", [])
     if decos:
         start = min(start, min(d.lineno for d in decos))
-    # Pull leading comment lines (e.g. okf-invariant) that sit directly above.
     while start > 1 and source_lines[start - 2].strip().startswith("#"):
         start -= 1
-    return "".join(source_lines[start - 1 : node.end_lineno])
+    return start, node.end_lineno
+
+
+def _segment(source_lines: list[str], node: ast.stmt) -> str:
+    """Exact source text of a top-level statement, decorators + comments included."""
+    start, end = _symbol_span(source_lines, node)
+    return "".join(source_lines[start - 1 : end])
 
 
 def _skeleton_def(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> str:
@@ -350,12 +349,14 @@ def interface_skeleton(source: str) -> str:
 def apply_patch(source: str, patch: list[dict]) -> str:
     """Fold AST-level ops into canonical source. Ops:
     {"op":"append","code":…} · {"op":"replace_symbol","name":…,"code":…}
-    · {"op":"delete_symbol","name":…}. Raises ValueError on a bad op."""
+    · {"op":"delete_symbol","name":…}. Each op splices only the target's own
+    lines (decorators and attached leading comments included) into the original
+    text, so comments, pragmas and formatting elsewhere survive verbatim.
+    Raises ValueError on a bad op."""
     for op in patch:
         kind = op.get("op")
         if kind == "append":
-            code = op["code"]
-            source = source.rstrip("\n") + "\n\n\n" + code.rstrip("\n") + "\n"
+            source = source.rstrip("\n") + "\n\n\n" + op["code"].rstrip("\n") + "\n"
             continue
         if kind not in ("replace_symbol", "delete_symbol"):
             raise ValueError(f"unknown patch op {kind!r}")
@@ -372,11 +373,16 @@ def apply_patch(source: str, patch: list[dict]) -> str:
         )
         if target is None:
             raise ValueError(f"patch targets unknown top-level symbol {op['name']!r}")
-        start = target.lineno
-        if target.decorator_list:
-            start = min(start, min(d.lineno for d in target.decorator_list))
-        replacement = op["code"].rstrip("\n") + "\n" if kind == "replace_symbol" else ""
-        source = "".join(lines[: start - 1]) + replacement + "".join(lines[target.end_lineno :])
+        start, end = _symbol_span(lines, target)
+        head, tail = "".join(lines[: start - 1]), "".join(lines[end:])
+        if kind == "replace_symbol":
+            source = head + op["code"].rstrip("\n") + "\n" + tail
+        else:
+            head, tail = head.rstrip("\n"), tail.lstrip("\n")
+            if head and tail:
+                source = head + "\n\n\n" + tail
+            else:
+                source = head + "\n" if head else tail
     return source
 
 
@@ -457,14 +463,14 @@ def _exception_name(raise_stmt: ast.Raise) -> str | None:
 
 
 def mine_guard_invariants(tree: ast.Module) -> list[str]:
-    """For every top-level function whose body opens with guard clauses
-    (`if <cond on one parameter>: raise <Exc>`), synthesize a callable
+    """For every top-level function (sync or async) whose body opens with guard
+    clauses (`if <cond on one parameter>: raise <Exc>`), synthesize a callable
     invariant `call:fn(param=value, …) raises Exc` with arguments that trip
     that guard. Stops at the first non-guard statement; skips anything it
     cannot synthesize deterministically."""
     out: list[str] = []
     for fn in tree.body:
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or isinstance(fn, ast.AsyncFunctionDef):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         a = fn.args
         if a.posonlyargs or a.vararg or a.kwonlyargs or a.kwarg:
@@ -495,4 +501,104 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
             inv = f"call:{fn.name}({', '.join(kwargs)}) raises {exc}"
             if inv not in out:
                 out.append(inv)
+    return out
+
+
+# ------------------------------------------------ package-aware import graph
+
+
+def module_name(path: str) -> str:
+    """Dotted import name of a tracked file: `pkg/models.py` -> `pkg.models`,
+    `pkg/__init__.py` -> `pkg`; a root-level `__init__.py` stays `__init__`."""
+    if not path:
+        raise ValueError("empty module path")
+    parts = path.replace("\\", "/").removesuffix(".py").split("/")
+    if parts[-1] == "__init__" and len(parts) > 1:
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _package_of(path: str) -> str:
+    """Dotted package a file lives in (`pkg/__init__.py` and `pkg/x.py` -> `pkg`)."""
+    parts = path.replace("\\", "/").removesuffix(".py").split("/")
+    return ".".join(parts[:-1])
+
+
+def module_map(paths: dict[str, str]) -> dict[str, str]:
+    """Importable dotted names -> node_id. A stem that is unique in the project
+    stays importable by its bare name (flat, sys.path-style projects)."""
+    out = {module_name(p): nid for nid, p in paths.items()}
+    stems: dict[str, int] = {}
+    for p in paths.values():
+        stem = p.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".py")
+        stems[stem] = stems.get(stem, 0) + 1
+    for nid, p in paths.items():
+        stem = p.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".py")
+        if stems[stem] == 1:
+            out.setdefault(stem, nid)
+    return out
+
+
+def _lookup(dotted: str, modules: dict[str, str]) -> tuple[str | None, bool]:
+    """(node_id of the longest known prefix, whether the whole name matched)."""
+    parts = dotted.split(".")
+    for i in range(len(parts), 0, -1):
+        nid = modules.get(".".join(parts[:i]))
+        if nid is not None:
+            return nid, i == len(parts)
+    return None, False
+
+
+def _import_records(
+    node_id: str, path: str, tree: ast.Module, modules: dict[str, str]
+) -> list[tuple[str, str | None, str | None]]:
+    """(dep node_id, name imported from it or None for the module object itself,
+    local binding) for every top-level import resolving to another project module.
+    Relative imports resolve against the importing file's package."""
+    package = _package_of(path)
+    out: list[tuple[str, str | None, str | None]] = []
+
+    def add(nid: str | None, name: str | None, local: str | None) -> None:
+        if nid is not None and nid != node_id:
+            out.append((nid, name, local))
+
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                nid, _exact = _lookup(alias.name, modules)
+                add(nid, None, alias.asname or alias.name.split(".")[0])
+        elif isinstance(stmt, ast.ImportFrom):
+            if stmt.level:
+                base_parts = package.split(".") if package else []
+                if stmt.level - 1 > len(base_parts):
+                    continue  # climbs above the project root
+                base_parts = base_parts[: len(base_parts) - (stmt.level - 1)]
+                base = ".".join(base_parts + ([stmt.module] if stmt.module else []))
+            else:
+                base = stmt.module or ""
+            base_nid, exact = _lookup(base, modules) if base else (None, False)
+            for alias in stmt.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                sub_nid, sub_exact = _lookup(f"{base}.{alias.name}" if base else alias.name, modules)
+                if sub_exact and sub_nid != base_nid:
+                    add(sub_nid, None, local)  # `from pkg import submodule`
+                elif base_nid is not None:
+                    add(base_nid, alias.name if exact else None, local)
+    return out
+
+
+def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str]) -> dict[str, set[str]]:
+    """Dependency node_id -> names this module imports from it (empty when it
+    imports the module object itself). Unparseable source resolves to nothing."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    out: dict[str, set[str]] = {}
+    for nid, name, _local in _import_records(node_id, path, tree, modules):
+        out.setdefault(nid, set())
+        if name is not None:
+            out[nid].add(name)
     return out
