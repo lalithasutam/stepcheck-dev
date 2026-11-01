@@ -366,17 +366,40 @@ def interface_skeleton(source: str) -> str:
 # ------------------------------------------------------------ patch folding
 
 
+def _trailing_main_guard(tree: ast.Module) -> ast.If | None:
+    """The module's last top-level statement when it is `if __name__ == "__main__":`."""
+    last = tree.body[-1] if tree.body else None
+    if not isinstance(last, ast.If) or not isinstance(last.test, ast.Compare):
+        return None
+    sides = [last.test.left, *last.test.comparators]
+    names = {n.id for n in sides if isinstance(n, ast.Name)}
+    values = {c.value for c in sides if isinstance(c, ast.Constant)}
+    return last if names == {"__name__"} and values == {"__main__"} else None
+
+
 def apply_patch(source: str, patch: list[dict]) -> str:
     """Fold AST-level ops into canonical source. Ops:
     {"op":"append","code":…} · {"op":"replace_symbol","name":…,"code":…}
     · {"op":"delete_symbol","name":…}. Each op splices only the target's own
     lines (decorators and attached leading comments included) into the original
-    text, so comments, pragmas and formatting elsewhere survive verbatim.
+    text, so comments, pragmas and formatting elsewhere survive verbatim. When
+    the module ends with an `if __name__ == "__main__":` guard, `append` inserts
+    just before it (comments attached to the guard stay attached), so a script
+    never calls code that is defined after its own entry point.
     Raises ValueError on a bad op."""
     for op in patch:
         kind = op.get("op")
         if kind == "append":
-            source = source.rstrip("\n") + "\n\n\n" + op["code"].rstrip("\n") + "\n"
+            code = op["code"].rstrip("\n") + "\n"
+            guard = _trailing_main_guard(ast.parse(source))
+            if guard is None:
+                source = source.rstrip("\n") + "\n\n\n" + code
+            else:
+                lines = source.splitlines(keepends=True)
+                start, _end = _symbol_span(lines, guard)
+                head = "".join(lines[: start - 1]).rstrip("\n")
+                tail = "".join(lines[start - 1 :])
+                source = (head + "\n\n\n" if head else "") + code + "\n\n" + tail
             continue
         if kind not in ("replace_symbol", "delete_symbol"):
             raise ValueError(f"unknown patch op {kind!r}")

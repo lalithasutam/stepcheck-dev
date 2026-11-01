@@ -6,6 +6,8 @@
   stepcheck preview     regenerate the self-contained stepcheck-studio-preview.html
   stepcheck audit [p]   read Claude Code session logs (default ~/.claude/projects/) and
                         receipt the cache-cliff waste + dropped-symbol regressions
+  stepcheck ci [path]   headless gatekeeper: parse, attestations, Gates A/B/C for every
+                        module; exit 1 names the failing module and violation
 """
 from __future__ import annotations
 
@@ -266,6 +268,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-# ------------------------------------------------------------- stepcheck ci
