@@ -9,3 +9,5 @@ __pycache__/
 .stepcheck/
 frontend/tsconfig.tsbuildinfo
 .claude/settings.local.json
+build/
+dist/

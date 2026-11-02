@@ -112,8 +112,12 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _ci_parse(root: Path) -> list[tuple[str, str]]:
-    """(file, problem) for every tracked module that does not parse."""
+    """(file, problem) for every tracked module that does not parse. Decodes the
+    way the kernel does (UTF-8, BOM stripped), so a file the kernel tracks never
+    fails here."""
     import ast
+
+    from kernel import _okf
 
     problems: list[tuple[str, str]] = []
     for p in sorted(root.rglob("*.py")):
@@ -121,7 +125,7 @@ def _ci_parse(root: Path) -> list[tuple[str, str]]:
             continue
         rel = str(p.relative_to(root))
         try:
-            ast.parse(p.read_bytes().decode("utf-8"), filename=rel)
+            ast.parse(_okf.decode_source(p.read_bytes()), filename=rel)
         except UnicodeDecodeError:
             continue  # the kernel leaves non-UTF-8 files untracked
         except SyntaxError as exc:

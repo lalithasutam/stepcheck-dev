@@ -173,6 +173,13 @@ def test_init_session_prunes_frames_of_nodes_it_does_not_track(kernel, project):
     assert "old_billing" not in index and "billing.md" not in index  # index lists node ids, no ghosts
 
 
+def test_ci_accepts_a_bom_prefixed_module_like_the_kernel_does(tmp_path, capsys):
+    # Windows editors (and PowerShell's -Encoding utf8) prepend U+FEFF; the kernel strips it.
+    (tmp_path / "m.py").write_bytes(b"\xef\xbb\xbf" + b"def f(x: int) -> int:\n    return x\n")
+
+    assert cli.main(["ci", str(tmp_path)]) == 0, capsys.readouterr().out
+
+
 # ---------------------------------------------------- 4. LF everywhere
 
 

@@ -13,7 +13,7 @@ Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run), Door 2 REST `/v1/step/*` + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 95 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate) |
+| `backend/tests/` | 96 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.2% tokens saved) + review generator |
