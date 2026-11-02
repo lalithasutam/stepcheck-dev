@@ -402,6 +402,19 @@ class StateKernel:
         node.status = LOCKED
         self._flush(s)
 
+    def provenance(self, session_id: str, node_id: str) -> dict:
+        """The node's latest attestation as an in-toto Statement v1 inside a DSSE
+        envelope (`payloadType: application/vnd.in-toto+json`, base64 payload):
+        subject = the tracked file and its on-disk SHA-256; predicate = the gate
+        verdicts, conserved symbols, executed invariants and the session turn.
+        Deterministic across machines and rehydration; the signature is the
+        kernel's SHA-256 scheme, not a key. KeyError when the node has never
+        landed a commit."""
+        s, node = self._get(session_id, node_id)
+        if not node.verified:
+            raise KeyError(f"node '{node_id}' has no attestation in session '{session_id}'")
+        return _in_toto_envelope(session_id, node.info, node.verified[-1]["payload"], len(node.verified))
+
     def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError) -> CommitVerdict:
         if not node.locked:
             node.status = REJECTED
@@ -622,3 +635,44 @@ def _session_from_json(data: dict) -> _Session:
         omissions_blocked=int(data.get("omissions_blocked", 0)),
         scratchpad=list(data.get("scratchpad", [])),
     )
+
+
+_IN_TOTO_PAYLOAD_TYPE = "application/vnd.in-toto+json"
+_IN_TOTO_PREDICATE_TYPE = "https://stepcheck.dev/attestation/v1"
+_IN_TOTO_BUILDER_ID = "https://github.com/lalithasutam/stepcheck-dev#StateKernel"
+
+
+def _in_toto_envelope(session_id: str, info: _okf.ModuleInfo, latest: dict, count: int) -> dict:
+    """in-toto Statement v1 for a landed commit, DSSE-wrapped the way cosign /
+    Witness expect: `subject[]` carries the file and its sha256, the predicate
+    carries what the gates verified. Same deterministic sha256 "signature" as
+    the per-commit envelope (keyid `_DSSE_KEYID`); no private key is involved."""
+    import base64
+    import json
+
+    statement = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [{"name": info.path.replace("\\", "/"), "digest": {"sha256": latest["sha256"]}}],
+        "predicateType": _IN_TOTO_PREDICATE_TYPE,
+        "predicate": {
+            "builder": {"id": _IN_TOTO_BUILDER_ID},
+            "session_id": session_id,
+            "node_id": info.node_id,
+            "turn": latest["turn"],
+            "attestation_count": count,
+            "gates": {"A": "pass", "B": "pass", "C": "pass"},
+            "deps": list(info.deps),
+            "exports": list(info.exports),
+            "preserved_symbols": list(info.preserved_symbols),
+            "invariants_executed": list(info.invariants),
+            "invariants_auto_mined": list(info.mined_invariants),
+        },
+    }
+    canonical = json.dumps(statement, sort_keys=True, separators=(",", ":"))
+    return {
+        "payloadType": _IN_TOTO_PAYLOAD_TYPE,
+        "payload": base64.b64encode(canonical.encode("utf-8")).decode("ascii"),
+        "signatures": [
+            {"keyid": _DSSE_KEYID, "sig": _sha256(f"DSSEv1 {_IN_TOTO_PAYLOAD_TYPE} {canonical}")}
+        ],
+    }

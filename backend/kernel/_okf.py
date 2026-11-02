@@ -57,16 +57,18 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     a plain set of flat module names is accepted for backwards compatibility.
     Decorators are fingerprinted twice: once per module (`@name`) and once per
     symbol (`@name on symbol`), so dropping `@fixture` from one function is an
-    omission even while a sibling still carries it."""
+    omission even while a sibling still carries it. Method decorators are
+    fingerprinted per dotted symbol (`@width.setter on Box.width`)."""
     tree = ast.parse(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
     preserved: list[str] = []
 
-    def keep_decorators(stmt: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+    def keep_decorators(stmt: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef, owner: str = "") -> None:
         for dec in stmt.decorator_list:
             name = ast.unparse(dec).split("(")[0]
-            for sym in (f"@{name}", f"@{name} on {stmt.name}"):
+            symbols = (f"@{name} on {owner}.{stmt.name}",) if owner else (f"@{name}", f"@{name} on {stmt.name}")
+            for sym in symbols:
                 if sym not in preserved:
                     preserved.append(sym)
 
@@ -82,6 +84,9 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
                 exports.append(f"class {stmt.name}({bases})" if bases else f"class {stmt.name}")
                 preserved.append(f"class {stmt.name}")
             keep_decorators(stmt)
+            for member in stmt.body:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    keep_decorators(member, owner=stmt.name)
 
     records = _import_records(node_id, path, tree, modules)
     deps = sorted({nid for nid, _name, _local in records})
@@ -296,7 +301,9 @@ def _skeleton_def(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = ""
     return "".join(out)
 
 
-def _skeleton_class(node: ast.ClassDef) -> str:
+def _skeleton_class(node: ast.ClassDef, focus_members: frozenset[str] = frozenset(), lines: list[str] | None = None) -> str:
+    """Class header + docstring with every method as a skeleton — except the
+    `focus_members` (dotted focus `Class.method`), emitted verbatim from `lines`."""
     bases = ", ".join(ast.unparse(b) for b in node.bases)
     out = [f"@{ast.unparse(d)}\n" for d in node.decorator_list]
     out.append(f"class {node.name}({bases}):\n" if bases else f"class {node.name}:\n")
@@ -307,7 +314,10 @@ def _skeleton_class(node: ast.ClassDef) -> str:
     if not members and not doc:
         out.append("    ...\n")
     for m in members:
-        out.append(_skeleton_def(m, indent="    "))
+        if m.name in focus_members and lines is not None:
+            out.append(_segment(lines, m))
+        else:
+            out.append(_skeleton_def(m, indent="    "))
     return "".join(out)
 
 
@@ -319,10 +329,17 @@ def _assign_names(node: ast.stmt) -> list[str]:
 def skeleton(source: str, focus: list[str]) -> str:
     """Slice a module: `focus` defs/classes verbatim; every other def/class as
     decorators + signature + docstring + `...`; runs of module-level
-    assignments folded into one summary line; imports kept verbatim."""
+    assignments folded into one summary line; imports kept verbatim. A dotted
+    focus `Class.method` keeps the class as a skeleton and emits only that
+    method verbatim — the class-rewrite bottleneck measured on real packages."""
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
-    keep = set(focus)
+    keep = {f for f in focus if "." not in f}
+    members: dict[str, set[str]] = {}
+    for f in focus:
+        if "." in f:
+            owner, _, member = f.partition(".")
+            members.setdefault(owner, set()).add(member)
     out: list[str] = []
     pending_assigns: list[str] = []
 
@@ -349,7 +366,10 @@ def skeleton(source: str, focus: list[str]) -> str:
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             out.append("\n\n" + (_segment(lines, stmt) if stmt.name in keep else _skeleton_def(stmt)))
         elif isinstance(stmt, ast.ClassDef):
-            out.append("\n\n" + (_segment(lines, stmt) if stmt.name in keep else _skeleton_class(stmt)))
+            if stmt.name in keep:
+                out.append("\n\n" + _segment(lines, stmt))
+            else:
+                out.append("\n\n" + _skeleton_class(stmt, frozenset(members.get(stmt.name, ())), lines))
         elif isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
             out.append(ast.unparse(stmt) + "\n")  # module docstring
         else:
@@ -393,6 +413,10 @@ def apply_patch(source: str, patch: list[dict]) -> str:
     the module ends with an `if __name__ == "__main__":` guard, `append` inserts
     just before it (comments attached to the guard stay attached), so a script
     never calls code that is defined after its own entry point.
+    `name` may be dotted (`Class.method`): the op then splices that method
+    inside its class, re-indenting unindented `code`. A name addresses its
+    whole definition group — `@overload` stubs plus the implementation, a
+    property getter with its setter — never just the first def.
     Raises ValueError on a bad op."""
     for op in patch:
         kind = op.get("op")
@@ -412,25 +436,24 @@ def apply_patch(source: str, patch: list[dict]) -> str:
             raise ValueError(f"unknown patch op {kind!r}")
         tree = ast.parse(source)
         lines = source.splitlines(keepends=True)
-        target = next(
-            (
-                s
-                for s in tree.body
-                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and s.name == op["name"]
-            ),
-            None,
-        )
-        if target is None:
+        body, group = _resolve_symbol(tree, op["name"])
+        if not group:
             raise ValueError(f"patch targets unknown top-level symbol {op['name']!r}")
-        start, end = _symbol_span(lines, target)
+        start, end = _group_span(lines, group)
         head, tail = "".join(lines[: start - 1]), "".join(lines[end:])
+        indent = " " * group[0].col_offset
         if kind == "replace_symbol":
-            source = head + op["code"].rstrip("\n") + "\n" + tail
+            code = op["code"].rstrip("\n") + "\n"
+            if indent and not code.startswith((" ", "\t")):
+                code = "".join(indent + ln if ln.strip() else ln for ln in code.splitlines(keepends=True))
+            source = head + code + tail
+        elif indent and len(body) == len(group):
+            source = head + f"{indent}...\n" + tail  # a class body cannot be empty
         else:
             head, tail = head.rstrip("\n"), tail.lstrip("\n")
+            gap = "\n\n" if indent else "\n\n\n"
             if head and tail:
-                source = head + "\n\n\n" + tail
+                source = head + gap + tail
             else:
                 source = head + "\n" if head else tail
     return source
@@ -520,7 +543,10 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
     cannot synthesize deterministically. Flexible signatures are fine:
     positional-only parameters are passed positionally, required keyword-only
     ones get typed mocks, and `*args` / `**kwargs` are left empty — on the wild
-    corpus most `is None` / `not x` guards sit on exactly such functions."""
+    corpus most `is None` / `not x` guards sit on exactly such functions.
+    A guard is skipped when an earlier guard tests a parameter whose mock would
+    be `None` (no usable annotation): `None < 0` raises TypeError in that
+    earlier guard before the targeted one is reached (more_itertools.windowed)."""
     out: list[str] = []
     for fn in tree.body:
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -535,28 +561,32 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
         body = fn.body
         if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
             body = body[1:]  # docstring
+        tested_before: set[str] = set()
         for stmt in body:
             if not (isinstance(stmt, ast.If) and not stmt.orelse and len(stmt.body) == 1
                     and isinstance(stmt.body[0], ast.Raise)):
                 break
+            tested_here = {n.id for n in ast.walk(stmt.test) if isinstance(n, ast.Name) and n.id in params}
             exc = _exception_name(stmt.body[0])
             hit = _violating_value(stmt.test, params)
-            if exc is None or hit is None:
-                continue
-            name, value = hit
-            # Positional-only: everything up to the violating parameter (or the
-            # required prefix, whichever is longer) must be passed in order.
-            hit_pos = next((i for i, p in enumerate(a.posonlyargs) if p.arg == name), -1)
-            n_pos = max(hit_pos + 1, sum(1 for p in a.posonlyargs if p.arg in required))
-            args = [value if p.arg == name else mock_value(p) for p in a.posonlyargs[:n_pos]]
-            for p in a.args + a.kwonlyargs:
-                if p.arg == name:
-                    args.append(f"{p.arg}={value}")
-                elif p.arg in required:
-                    args.append(f"{p.arg}={mock_value(p)}")
-            inv = f"call:{fn.name}({', '.join(args)}) raises {exc}"
-            if inv not in out:
-                out.append(inv)
+            if exc is not None and hit is not None:
+                name, value = hit
+                blocked = any(p != name and mock_value(params[p]) == "None" for p in tested_before)
+                if not blocked:
+                    # Positional-only: everything up to the violating parameter (or the
+                    # required prefix, whichever is longer) must be passed in order.
+                    hit_pos = next((i for i, p in enumerate(a.posonlyargs) if p.arg == name), -1)
+                    n_pos = max(hit_pos + 1, sum(1 for p in a.posonlyargs if p.arg in required))
+                    args = [value if p.arg == name else mock_value(p) for p in a.posonlyargs[:n_pos]]
+                    for p in a.args + a.kwonlyargs:
+                        if p.arg == name:
+                            args.append(f"{p.arg}={value}")
+                        elif p.arg in required:
+                            args.append(f"{p.arg}={mock_value(p)}")
+                    inv = f"call:{fn.name}({', '.join(args)}) raises {exc}"
+                    if inv not in out:
+                        out.append(inv)
+            tested_before |= tested_here
     return out
 
 
@@ -691,3 +721,39 @@ def _signatures(source: str) -> dict[str, str]:
         elif isinstance(stmt, ast.ClassDef):
             out[stmt.name] = f"class {stmt.name}({', '.join(ast.unparse(b) for b in stmt.bases)})"
     return out
+
+
+def _definition_group(body: list[ast.stmt], name: str) -> list[ast.stmt]:
+    """The contiguous run of defs/classes named `name`, starting at its first
+    definition: an `@overload` stub chain with its implementation, or a
+    `@property` getter with its `.setter` / `.deleter`, is one symbol. Patch
+    ops and focused checkouts address the whole run, never just the first def."""
+    group: list[ast.stmt] = []
+    for stmt in body:
+        is_def = isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        if is_def and stmt.name == name:
+            group.append(stmt)
+        elif group:
+            break
+    return group
+
+
+def _resolve_symbol(tree: ast.Module, dotted: str) -> tuple[list[ast.stmt], list[ast.stmt]]:
+    """(container body, definition group) for `name` or `Class.method`
+    (nested classes chain further). An empty group means no such symbol."""
+    body: list[ast.stmt] = tree.body
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        owner = next((s for s in body if isinstance(s, ast.ClassDef) and s.name == part), None)
+        if owner is None:
+            return body, []
+        body = owner.body
+    return body, _definition_group(body, parts[-1])
+
+
+def _group_span(source_lines: list[str], group: list[ast.stmt]) -> tuple[int, int]:
+    """Line range covering every definition of a group, leading comments and
+    decorators of the first one included."""
+    start, _ = _symbol_span(source_lines, group[0])
+    _, end = _symbol_span(source_lines, group[-1])
+    return start, end

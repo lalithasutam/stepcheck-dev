@@ -103,8 +103,10 @@ STEP_BUDGET = 200_000      # Python line events
 WALL_BUDGET_SECONDS = 0.5  # fallback for work that emits few line events
 
 
-class ExecutionBudgetExceeded(RuntimeError):
-    """Raised inside the guarded code by the trace hook."""
+class ExecutionBudgetExceeded(BaseException):
+    """Raised inside the guarded code by the trace hook. A BaseException on
+    purpose: the staged code's own `except Exception:` cannot swallow the budget
+    and keep running."""
 
 
 def guarded(fn, *, steps: int | None = STEP_BUDGET, seconds: float = WALL_BUDGET_SECONDS):
@@ -113,16 +115,31 @@ def guarded(fn, *, steps: int | None = STEP_BUDGET, seconds: float = WALL_BUDGET
     step axis; the clock is a backstop. `steps=None` keeps only the clock —
     the right budget for *loading* a staged module, where a real package
     legitimately executes far more line events than any invariant call.
-    Recursion depth is left to Python's own RecursionError. Thread-local:
+    Recursion is capped by the hook itself, RECURSION_HEADROOM frames below
+    `sys.getrecursionlimit()`: a RecursionError raised while CPython enters the
+    trace function makes it drop the hook silently, after which the staged code
+    could catch the RecursionError and run unguarded. Thread-local:
     sys.settrace affects this thread only."""
     import time
 
     deadline = time.monotonic() + seconds
     count = 0
+    depth = 0
+    frame, base = sys._getframe(), 0
+    while frame is not None:
+        base += 1
+        frame = frame.f_back
+    max_depth = max(sys.getrecursionlimit() - RECURSION_HEADROOM - base, RECURSION_HEADROOM)
 
     def tracer(frame, event, arg):
-        nonlocal count
-        if event == "line":
+        nonlocal count, depth
+        if event == "call":
+            depth += 1
+            if depth > max_depth:
+                raise ExecutionBudgetExceeded(f"exceeded recursion depth {max_depth:,}")
+        elif event == "return":
+            depth -= 1
+        elif event == "line":
             count += 1
             if steps is not None and count > steps:
                 raise ExecutionBudgetExceeded(f"exceeded {steps:,} execution steps")
@@ -139,3 +156,6 @@ def guarded(fn, *, steps: int | None = STEP_BUDGET, seconds: float = WALL_BUDGET
 
 
 IMPORT_WALL_BUDGET_SECONDS = 5.0  # loading a staged module: clock only, no step cap
+
+
+RECURSION_HEADROOM = 64  # frames kept free under sys.getrecursionlimit() so the tracer itself can always run

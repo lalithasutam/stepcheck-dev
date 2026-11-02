@@ -34,8 +34,8 @@
 <p><strong>Verdict: the deep-module bet holds, and the fold pays.</strong> One
 kernel behind one Python seam carries compilation, skeleton slicing, patch
 folding, three gates (now with semantic invariants), locking, attestation and
-telemetry in 1844 lines; everything HTTP-shaped lives behind the second
-seam (584 lines). 118 tests collected in 1.36s across the two seams, zero mocks of
+telemetry in 2005 lines; everything HTTP-shaped lives behind the second
+seam (584 lines). 133 tests collected in 1.93s across the two seams, zero mocks of
 internals, and all four events injected into the 50-turn benchmark were caught
 at the intended gate.</p>
 
@@ -45,7 +45,7 @@ at the intended gate.</p>
 <tr><td><code>StateKernel</code> (Seam 1)</td>
     <td>8 methods: init_session · checkout(focus=) · commit(source= | patch=) ·
         lock_node · finalize_session · get_telemetry · record_draft/drafts · graph</td>
-    <td>1844 LOC across <code>kernel/</code> (_okf, _gates, _sandbox,
+    <td>2005 LOC across <code>kernel/</code> (_okf, _gates, _sandbox,
         _telemetry, _tokens stay private); every kernel caveat from v1 and v2 is closed</td>
     <td class="ok">Deleting any private module breaks only the kernel — no caller
         imports them.</td></tr>
