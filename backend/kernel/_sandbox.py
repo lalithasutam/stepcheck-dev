@@ -107,11 +107,14 @@ class ExecutionBudgetExceeded(RuntimeError):
     """Raised inside the guarded code by the trace hook."""
 
 
-def guarded(fn, *, steps: int = STEP_BUDGET, seconds: float = WALL_BUDGET_SECONDS):
+def guarded(fn, *, steps: int | None = STEP_BUDGET, seconds: float = WALL_BUDGET_SECONDS):
     """Run `fn()` under a per-thread trace hook that aborts at `steps` line
     events or `seconds` of wall clock, whichever first. Deterministic on the
-    step axis; the clock is a backstop. Recursion depth is left to Python's
-    own RecursionError. Thread-local: sys.settrace affects this thread only."""
+    step axis; the clock is a backstop. `steps=None` keeps only the clock —
+    the right budget for *loading* a staged module, where a real package
+    legitimately executes far more line events than any invariant call.
+    Recursion depth is left to Python's own RecursionError. Thread-local:
+    sys.settrace affects this thread only."""
     import time
 
     deadline = time.monotonic() + seconds
@@ -121,7 +124,7 @@ def guarded(fn, *, steps: int = STEP_BUDGET, seconds: float = WALL_BUDGET_SECOND
         nonlocal count
         if event == "line":
             count += 1
-            if count > steps:
+            if steps is not None and count > steps:
                 raise ExecutionBudgetExceeded(f"exceeded {steps:,} execution steps")
             if time.monotonic() > deadline:
                 raise ExecutionBudgetExceeded(f"exceeded {seconds:.1f}s wall clock")
@@ -133,3 +136,6 @@ def guarded(fn, *, steps: int = STEP_BUDGET, seconds: float = WALL_BUDGET_SECOND
         return fn()
     finally:
         sys.settrace(previous)
+
+
+IMPORT_WALL_BUDGET_SECONDS = 5.0  # loading a staged module: clock only, no step cap

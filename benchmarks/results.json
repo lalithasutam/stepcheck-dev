@@ -10,7 +10,7 @@
           "code": "def _step_1(x: int) -> int:\n    return x + 1\n"
         }
       ],
-      "checkout_tokens": 305,
+      "checkout_tokens": 310,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -33,6 +33,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -63,7 +64,7 @@
         ]
       },
       "raw": 425,
-      "compacted": 324,
+      "compacted": 329,
       "dollars": 0.0003,
       "omissions_blocked": 0
     },
@@ -123,7 +124,7 @@
         ]
       },
       "raw": 1162,
-      "compacted": 582,
+      "compacted": 587,
       "dollars": 0.0017,
       "omissions_blocked": 0
     },
@@ -182,7 +183,7 @@
         ]
       },
       "raw": 2150,
-      "compacted": 807,
+      "compacted": 812,
       "dollars": 0.004,
       "omissions_blocked": 0
     },
@@ -241,7 +242,7 @@
         ]
       },
       "raw": 3396,
-      "compacted": 1004,
+      "compacted": 1009,
       "dollars": 0.0072,
       "omissions_blocked": 0
     },
@@ -304,7 +305,7 @@
         ]
       },
       "raw": 5774,
-      "compacted": 1242,
+      "compacted": 1247,
       "dollars": 0.0136,
       "omissions_blocked": 0
     },
@@ -318,7 +319,7 @@
           "code": "def _step_6(x: int) -> int:\n    return x + 6\n"
         }
       ],
-      "checkout_tokens": 335,
+      "checkout_tokens": 340,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -343,6 +344,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -373,7 +375,7 @@
         ]
       },
       "raw": 8165,
-      "compacted": 1596,
+      "compacted": 1606,
       "dollars": 0.0197,
       "omissions_blocked": 0
     },
@@ -435,8 +437,8 @@
         ]
       },
       "raw": 10569,
-      "compacted": 1878,
-      "dollars": 0.0261,
+      "compacted": 1888,
+      "dollars": 0.026,
       "omissions_blocked": 0
     },
     {
@@ -496,8 +498,8 @@
         ]
       },
       "raw": 12986,
-      "compacted": 2127,
-      "dollars": 0.0326,
+      "compacted": 2137,
+      "dollars": 0.0325,
       "omissions_blocked": 0
     },
     {
@@ -557,7 +559,7 @@
         ]
       },
       "raw": 15416,
-      "compacted": 2349,
+      "compacted": 2359,
       "dollars": 0.0392,
       "omissions_blocked": 0
     },
@@ -620,7 +622,7 @@
         ]
       },
       "raw": 17860,
-      "compacted": 2611,
+      "compacted": 2621,
       "dollars": 0.0457,
       "omissions_blocked": 0
     },
@@ -634,7 +636,7 @@
           "code": "def _step_11(x: int) -> int:\n    return x + 11\n"
         }
       ],
-      "checkout_tokens": 345,
+      "checkout_tokens": 350,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -659,6 +661,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -689,7 +692,7 @@
         ]
       },
       "raw": 20318,
-      "compacted": 2975,
+      "compacted": 2990,
       "dollars": 0.052,
       "omissions_blocked": 0
     },
@@ -751,8 +754,8 @@
         ]
       },
       "raw": 22789,
-      "compacted": 3267,
-      "dollars": 0.0586,
+      "compacted": 3282,
+      "dollars": 0.0585,
       "omissions_blocked": 0
     },
     {
@@ -812,7 +815,7 @@
         ]
       },
       "raw": 25274,
-      "compacted": 3526,
+      "compacted": 3541,
       "dollars": 0.0652,
       "omissions_blocked": 0
     },
@@ -873,7 +876,7 @@
         ]
       },
       "raw": 27772,
-      "compacted": 3757,
+      "compacted": 3772,
       "dollars": 0.072,
       "omissions_blocked": 0
     },
@@ -936,8 +939,8 @@
         ]
       },
       "raw": 30283,
-      "compacted": 4029,
-      "dollars": 0.0788,
+      "compacted": 4044,
+      "dollars": 0.0787,
       "omissions_blocked": 0
     },
     {
@@ -950,7 +953,7 @@
           "code": "def _step_16(x: int) -> int:\n    return x + 16\n"
         }
       ],
-      "checkout_tokens": 355,
+      "checkout_tokens": 360,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -975,6 +978,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -1005,7 +1009,7 @@
         ]
       },
       "raw": 32807,
-      "compacted": 4403,
+      "compacted": 4423,
       "dollars": 0.0852,
       "omissions_blocked": 0
     },
@@ -1067,7 +1071,7 @@
         ]
       },
       "raw": 35344,
-      "compacted": 4705,
+      "compacted": 4725,
       "dollars": 0.0919,
       "omissions_blocked": 0
     },
@@ -1128,8 +1132,8 @@
         ]
       },
       "raw": 37894,
-      "compacted": 4974,
-      "dollars": 0.0988,
+      "compacted": 4994,
+      "dollars": 0.0987,
       "omissions_blocked": 0
     },
     {
@@ -1189,7 +1193,7 @@
         ]
       },
       "raw": 40459,
-      "compacted": 5215,
+      "compacted": 5235,
       "dollars": 0.1057,
       "omissions_blocked": 0
     },
@@ -1206,11 +1210,11 @@
           "code": "def charge(account: str, amount_cents: int) -> dict:\n    if amount_cents <= 0:\n        raise ValueError(\"amount must be positive\")\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00)}\n"
         }
       ],
-      "checkout_tokens": 431,
+      "checkout_tokens": 436,
       "accepted": false,
       "gate": "B",
       "subtype": "INTRA_NODE_SYMBOL_DROPPED",
-      "error": "preserved symbol '@audit' of 'payments' was silently dropped from the staged source",
+      "error": "preserved symbol '@audit on charge' of 'payments' was silently dropped from the staged source",
       "dirtied": [],
       "recovered": true,
       "finalize_blocked": null,
@@ -1231,6 +1235,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -1261,8 +1266,8 @@
         ]
       },
       "raw": 43037,
-      "compacted": 5665,
-      "dollars": 0.1121,
+      "compacted": 5690,
+      "dollars": 0.112,
       "omissions_blocked": 1
     },
     {
@@ -1275,7 +1280,7 @@
           "code": "def _step_21(x: int) -> int:\n    return x + 21\n"
         }
       ],
-      "checkout_tokens": 374,
+      "checkout_tokens": 379,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -1300,6 +1305,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -1330,8 +1336,8 @@
         ]
       },
       "raw": 45628,
-      "compacted": 6058,
-      "dollars": 0.1187,
+      "compacted": 6088,
+      "dollars": 0.1186,
       "omissions_blocked": 1
     },
     {
@@ -1392,8 +1398,8 @@
         ]
       },
       "raw": 48234,
-      "compacted": 6369,
-      "dollars": 0.1256,
+      "compacted": 6399,
+      "dollars": 0.1255,
       "omissions_blocked": 1
     },
     {
@@ -1453,8 +1459,8 @@
         ]
       },
       "raw": 50854,
-      "compacted": 6647,
-      "dollars": 0.1326,
+      "compacted": 6677,
+      "dollars": 0.1325,
       "omissions_blocked": 1
     },
     {
@@ -1514,8 +1520,8 @@
         ]
       },
       "raw": 53487,
-      "compacted": 6898,
-      "dollars": 0.1398,
+      "compacted": 6928,
+      "dollars": 0.1397,
       "omissions_blocked": 1
     },
     {
@@ -1531,7 +1537,7 @@
           "code": "@audit\ndef charge(account: str, amount_cents: int, currency: str = \"USD\") -> dict:\n    if amount_cents <= 0:\n        raise ValueError(\"amount must be positive\")\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00), \"currency\": currency}\n"
         }
       ],
-      "checkout_tokens": 450,
+      "checkout_tokens": 455,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -1559,6 +1565,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -1589,8 +1596,8 @@
         ]
       },
       "raw": 56133,
-      "compacted": 7438,
-      "dollars": 0.1461,
+      "compacted": 7473,
+      "dollars": 0.146,
       "omissions_blocked": 1
     },
     {
@@ -1651,8 +1658,8 @@
         ]
       },
       "raw": 58791,
-      "compacted": 7767,
-      "dollars": 0.1531,
+      "compacted": 7802,
+      "dollars": 0.153,
       "omissions_blocked": 1
     },
     {
@@ -1712,8 +1719,8 @@
         ]
       },
       "raw": 61462,
-      "compacted": 8063,
-      "dollars": 0.1602,
+      "compacted": 8098,
+      "dollars": 0.1601,
       "omissions_blocked": 1
     },
     {
@@ -1773,8 +1780,8 @@
         ]
       },
       "raw": 64146,
-      "compacted": 8366,
-      "dollars": 0.1673,
+      "compacted": 8401,
+      "dollars": 0.1672,
       "omissions_blocked": 1
     },
     {
@@ -1834,8 +1841,8 @@
         ]
       },
       "raw": 66843,
-      "compacted": 8627,
-      "dollars": 0.1746,
+      "compacted": 8662,
+      "dollars": 0.1745,
       "omissions_blocked": 1
     },
     {
@@ -1897,8 +1904,8 @@
         ]
       },
       "raw": 69554,
-      "compacted": 8909,
-      "dollars": 0.1819,
+      "compacted": 8944,
+      "dollars": 0.1818,
       "omissions_blocked": 1
     },
     {
@@ -1911,7 +1918,7 @@
           "code": "def _step_31(x: int) -> int:\n    return x + 31\n"
         }
       ],
-      "checkout_tokens": 395,
+      "checkout_tokens": 400,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -1936,6 +1943,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -1966,8 +1974,8 @@
         ]
       },
       "raw": 72280,
-      "compacted": 9323,
-      "dollars": 0.1889,
+      "compacted": 9363,
+      "dollars": 0.1888,
       "omissions_blocked": 1
     },
     {
@@ -2028,8 +2036,8 @@
         ]
       },
       "raw": 75019,
-      "compacted": 9659,
-      "dollars": 0.1961,
+      "compacted": 9699,
+      "dollars": 0.196,
       "omissions_blocked": 1
     },
     {
@@ -2089,8 +2097,8 @@
         ]
       },
       "raw": 77772,
-      "compacted": 9972,
-      "dollars": 0.2034,
+      "compacted": 10012,
+      "dollars": 0.2033,
       "omissions_blocked": 1
     },
     {
@@ -2150,8 +2158,8 @@
         ]
       },
       "raw": 80539,
-      "compacted": 10242,
-      "dollars": 0.2109,
+      "compacted": 10282,
+      "dollars": 0.2108,
       "omissions_blocked": 1
     },
     {
@@ -2167,7 +2175,7 @@
           "code": "@audit\ndef charge(account: str, amount_cents: int, currency: str = \"USD\") -> dict:\n    if amount_cents == 0:\n        amount_cents = 1\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00), \"currency\": currency}\n"
         }
       ],
-      "checkout_tokens": 477,
+      "checkout_tokens": 482,
       "accepted": false,
       "gate": "C",
       "subtype": null,
@@ -2192,6 +2200,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -2222,8 +2231,8 @@
         ]
       },
       "raw": 83319,
-      "compacted": 10738,
-      "dollars": 0.2177,
+      "compacted": 10783,
+      "dollars": 0.2176,
       "omissions_blocked": 2
     },
     {
@@ -2268,8 +2277,8 @@
       "auto_mined_catch": false,
       "attestation": null,
       "raw": 86257,
-      "compacted": 10949,
-      "dollars": 0.2259,
+      "compacted": 10994,
+      "dollars": 0.2258,
       "omissions_blocked": 2
     },
     {
@@ -2330,8 +2339,8 @@
         ]
       },
       "raw": 89493,
-      "compacted": 11295,
-      "dollars": 0.2346,
+      "compacted": 11340,
+      "dollars": 0.2345,
       "omissions_blocked": 2
     },
     {
@@ -2391,8 +2400,8 @@
         ]
       },
       "raw": 92742,
-      "compacted": 11618,
-      "dollars": 0.2434,
+      "compacted": 11663,
+      "dollars": 0.2432,
       "omissions_blocked": 2
     },
     {
@@ -2452,8 +2461,8 @@
         ]
       },
       "raw": 96004,
-      "compacted": 11898,
-      "dollars": 0.2523,
+      "compacted": 11943,
+      "dollars": 0.2522,
       "omissions_blocked": 2
     },
     {
@@ -2515,8 +2524,8 @@
         ]
       },
       "raw": 99279,
-      "compacted": 12189,
-      "dollars": 0.2613,
+      "compacted": 12234,
+      "dollars": 0.2611,
       "omissions_blocked": 2
     },
     {
@@ -2529,7 +2538,7 @@
           "code": "def _step_41(x: int) -> int:\n    return x + 41\n"
         }
       ],
-      "checkout_tokens": 414,
+      "checkout_tokens": 420,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -2554,6 +2563,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -2584,8 +2594,8 @@
         ]
       },
       "raw": 102567,
-      "compacted": 12622,
-      "dollars": 0.2698,
+      "compacted": 12673,
+      "dollars": 0.2697,
       "omissions_blocked": 2
     },
     {
@@ -2646,8 +2656,8 @@
         ]
       },
       "raw": 105870,
-      "compacted": 12978,
-      "dollars": 0.2787,
+      "compacted": 13029,
+      "dollars": 0.2785,
       "omissions_blocked": 2
     },
     {
@@ -2707,8 +2717,8 @@
         ]
       },
       "raw": 109187,
-      "compacted": 13310,
-      "dollars": 0.2876,
+      "compacted": 13361,
+      "dollars": 0.2875,
       "omissions_blocked": 2
     },
     {
@@ -2768,8 +2778,8 @@
         ]
       },
       "raw": 112518,
-      "compacted": 13600,
-      "dollars": 0.2968,
+      "compacted": 13651,
+      "dollars": 0.2966,
       "omissions_blocked": 2
     },
     {
@@ -2831,8 +2841,8 @@
         ]
       },
       "raw": 115862,
-      "compacted": 13901,
-      "dollars": 0.3059,
+      "compacted": 13952,
+      "dollars": 0.3057,
       "omissions_blocked": 2
     },
     {
@@ -2845,7 +2855,7 @@
           "code": "def _step_46(x: int) -> int:\n    return x + 46\n"
         }
       ],
-      "checkout_tokens": 424,
+      "checkout_tokens": 430,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -2870,6 +2880,7 @@
         "def audit",
         "def charge",
         "@audit",
+        "@audit on charge",
         "call:account_key",
         "call:clamp"
       ],
@@ -2900,8 +2911,8 @@
         ]
       },
       "raw": 119219,
-      "compacted": 14344,
-      "dollars": 0.3146,
+      "compacted": 14401,
+      "dollars": 0.3145,
       "omissions_blocked": 2
     },
     {
@@ -2962,8 +2973,8 @@
         ]
       },
       "raw": 122589,
-      "compacted": 14709,
-      "dollars": 0.3236,
+      "compacted": 14766,
+      "dollars": 0.3235,
       "omissions_blocked": 2
     },
     {
@@ -3023,8 +3034,8 @@
         ]
       },
       "raw": 125972,
-      "compacted": 15051,
-      "dollars": 0.3328,
+      "compacted": 15108,
+      "dollars": 0.3326,
       "omissions_blocked": 2
     },
     {
@@ -3084,8 +3095,8 @@
         ]
       },
       "raw": 129368,
-      "compacted": 15351,
-      "dollars": 0.3421,
+      "compacted": 15408,
+      "dollars": 0.3419,
       "omissions_blocked": 2
     },
     {
@@ -3147,8 +3158,8 @@
         ]
       },
       "raw": 132779,
-      "compacted": 15662,
-      "dollars": 0.3514,
+      "compacted": 15719,
+      "dollars": 0.3512,
       "omissions_blocked": 2
     }
   ],
@@ -3177,7 +3188,7 @@
       "node": "payments",
       "gate": "B",
       "subtype": "INTRA_NODE_SYMBOL_DROPPED",
-      "error": "preserved symbol '@audit' of 'payments' was silently dropped from the staged source",
+      "error": "preserved symbol '@audit on charge' of 'payments' was silently dropped from the staged source",
       "auto_mined": false
     },
     {
@@ -3209,352 +3220,352 @@
     {
       "turn": 1,
       "raw": 425,
-      "compacted": 324,
-      "saved": 101,
+      "compacted": 329,
+      "saved": 96,
       "dollars": 0.0003
     },
     {
       "turn": 2,
       "raw": 1162,
-      "compacted": 582,
-      "saved": 580,
+      "compacted": 587,
+      "saved": 575,
       "dollars": 0.0017
     },
     {
       "turn": 3,
       "raw": 2150,
-      "compacted": 807,
-      "saved": 1343,
+      "compacted": 812,
+      "saved": 1338,
       "dollars": 0.004
     },
     {
       "turn": 4,
       "raw": 3396,
-      "compacted": 1004,
-      "saved": 2392,
+      "compacted": 1009,
+      "saved": 2387,
       "dollars": 0.0072
     },
     {
       "turn": 5,
       "raw": 5774,
-      "compacted": 1242,
-      "saved": 4532,
+      "compacted": 1247,
+      "saved": 4527,
       "dollars": 0.0136
     },
     {
       "turn": 6,
       "raw": 8165,
-      "compacted": 1596,
-      "saved": 6569,
+      "compacted": 1606,
+      "saved": 6559,
       "dollars": 0.0197
     },
     {
       "turn": 7,
       "raw": 10569,
-      "compacted": 1878,
-      "saved": 8691,
-      "dollars": 0.0261
+      "compacted": 1888,
+      "saved": 8681,
+      "dollars": 0.026
     },
     {
       "turn": 8,
       "raw": 12986,
-      "compacted": 2127,
-      "saved": 10859,
-      "dollars": 0.0326
+      "compacted": 2137,
+      "saved": 10849,
+      "dollars": 0.0325
     },
     {
       "turn": 9,
       "raw": 15416,
-      "compacted": 2349,
-      "saved": 13067,
+      "compacted": 2359,
+      "saved": 13057,
       "dollars": 0.0392
     },
     {
       "turn": 10,
       "raw": 17860,
-      "compacted": 2611,
-      "saved": 15249,
+      "compacted": 2621,
+      "saved": 15239,
       "dollars": 0.0457
     },
     {
       "turn": 11,
       "raw": 20318,
-      "compacted": 2975,
-      "saved": 17343,
+      "compacted": 2990,
+      "saved": 17328,
       "dollars": 0.052
     },
     {
       "turn": 12,
       "raw": 22789,
-      "compacted": 3267,
-      "saved": 19522,
-      "dollars": 0.0586
+      "compacted": 3282,
+      "saved": 19507,
+      "dollars": 0.0585
     },
     {
       "turn": 13,
       "raw": 25274,
-      "compacted": 3526,
-      "saved": 21748,
+      "compacted": 3541,
+      "saved": 21733,
       "dollars": 0.0652
     },
     {
       "turn": 14,
       "raw": 27772,
-      "compacted": 3757,
-      "saved": 24015,
+      "compacted": 3772,
+      "saved": 24000,
       "dollars": 0.072
     },
     {
       "turn": 15,
       "raw": 30283,
-      "compacted": 4029,
-      "saved": 26254,
-      "dollars": 0.0788
+      "compacted": 4044,
+      "saved": 26239,
+      "dollars": 0.0787
     },
     {
       "turn": 16,
       "raw": 32807,
-      "compacted": 4403,
-      "saved": 28404,
+      "compacted": 4423,
+      "saved": 28384,
       "dollars": 0.0852
     },
     {
       "turn": 17,
       "raw": 35344,
-      "compacted": 4705,
-      "saved": 30639,
+      "compacted": 4725,
+      "saved": 30619,
       "dollars": 0.0919
     },
     {
       "turn": 18,
       "raw": 37894,
-      "compacted": 4974,
-      "saved": 32920,
-      "dollars": 0.0988
+      "compacted": 4994,
+      "saved": 32900,
+      "dollars": 0.0987
     },
     {
       "turn": 19,
       "raw": 40459,
-      "compacted": 5215,
-      "saved": 35244,
+      "compacted": 5235,
+      "saved": 35224,
       "dollars": 0.1057
     },
     {
       "turn": 20,
       "raw": 43037,
-      "compacted": 5665,
-      "saved": 37372,
-      "dollars": 0.1121
+      "compacted": 5690,
+      "saved": 37347,
+      "dollars": 0.112
     },
     {
       "turn": 21,
       "raw": 45628,
-      "compacted": 6058,
-      "saved": 39570,
-      "dollars": 0.1187
+      "compacted": 6088,
+      "saved": 39540,
+      "dollars": 0.1186
     },
     {
       "turn": 22,
       "raw": 48234,
-      "compacted": 6369,
-      "saved": 41865,
-      "dollars": 0.1256
+      "compacted": 6399,
+      "saved": 41835,
+      "dollars": 0.1255
     },
     {
       "turn": 23,
       "raw": 50854,
-      "compacted": 6647,
-      "saved": 44207,
-      "dollars": 0.1326
+      "compacted": 6677,
+      "saved": 44177,
+      "dollars": 0.1325
     },
     {
       "turn": 24,
       "raw": 53487,
-      "compacted": 6898,
-      "saved": 46589,
-      "dollars": 0.1398
+      "compacted": 6928,
+      "saved": 46559,
+      "dollars": 0.1397
     },
     {
       "turn": 25,
       "raw": 56133,
-      "compacted": 7438,
-      "saved": 48695,
-      "dollars": 0.1461
+      "compacted": 7473,
+      "saved": 48660,
+      "dollars": 0.146
     },
     {
       "turn": 26,
       "raw": 58791,
-      "compacted": 7767,
-      "saved": 51024,
-      "dollars": 0.1531
+      "compacted": 7802,
+      "saved": 50989,
+      "dollars": 0.153
     },
     {
       "turn": 27,
       "raw": 61462,
-      "compacted": 8063,
-      "saved": 53399,
-      "dollars": 0.1602
+      "compacted": 8098,
+      "saved": 53364,
+      "dollars": 0.1601
     },
     {
       "turn": 28,
       "raw": 64146,
-      "compacted": 8366,
-      "saved": 55780,
-      "dollars": 0.1673
+      "compacted": 8401,
+      "saved": 55745,
+      "dollars": 0.1672
     },
     {
       "turn": 29,
       "raw": 66843,
-      "compacted": 8627,
-      "saved": 58216,
-      "dollars": 0.1746
+      "compacted": 8662,
+      "saved": 58181,
+      "dollars": 0.1745
     },
     {
       "turn": 30,
       "raw": 69554,
-      "compacted": 8909,
-      "saved": 60645,
-      "dollars": 0.1819
+      "compacted": 8944,
+      "saved": 60610,
+      "dollars": 0.1818
     },
     {
       "turn": 31,
       "raw": 72280,
-      "compacted": 9323,
-      "saved": 62957,
-      "dollars": 0.1889
+      "compacted": 9363,
+      "saved": 62917,
+      "dollars": 0.1888
     },
     {
       "turn": 32,
       "raw": 75019,
-      "compacted": 9659,
-      "saved": 65360,
-      "dollars": 0.1961
+      "compacted": 9699,
+      "saved": 65320,
+      "dollars": 0.196
     },
     {
       "turn": 33,
       "raw": 77772,
-      "compacted": 9972,
-      "saved": 67800,
-      "dollars": 0.2034
+      "compacted": 10012,
+      "saved": 67760,
+      "dollars": 0.2033
     },
     {
       "turn": 34,
       "raw": 80539,
-      "compacted": 10242,
-      "saved": 70297,
-      "dollars": 0.2109
+      "compacted": 10282,
+      "saved": 70257,
+      "dollars": 0.2108
     },
     {
       "turn": 35,
       "raw": 83319,
-      "compacted": 10738,
-      "saved": 72581,
-      "dollars": 0.2177
+      "compacted": 10783,
+      "saved": 72536,
+      "dollars": 0.2176
     },
     {
       "turn": 36,
       "raw": 86257,
-      "compacted": 10949,
-      "saved": 75308,
-      "dollars": 0.2259
+      "compacted": 10994,
+      "saved": 75263,
+      "dollars": 0.2258
     },
     {
       "turn": 37,
       "raw": 89493,
-      "compacted": 11295,
-      "saved": 78198,
-      "dollars": 0.2346
+      "compacted": 11340,
+      "saved": 78153,
+      "dollars": 0.2345
     },
     {
       "turn": 38,
       "raw": 92742,
-      "compacted": 11618,
-      "saved": 81124,
-      "dollars": 0.2434
+      "compacted": 11663,
+      "saved": 81079,
+      "dollars": 0.2432
     },
     {
       "turn": 39,
       "raw": 96004,
-      "compacted": 11898,
-      "saved": 84106,
-      "dollars": 0.2523
+      "compacted": 11943,
+      "saved": 84061,
+      "dollars": 0.2522
     },
     {
       "turn": 40,
       "raw": 99279,
-      "compacted": 12189,
-      "saved": 87090,
-      "dollars": 0.2613
+      "compacted": 12234,
+      "saved": 87045,
+      "dollars": 0.2611
     },
     {
       "turn": 41,
       "raw": 102567,
-      "compacted": 12622,
-      "saved": 89945,
-      "dollars": 0.2698
+      "compacted": 12673,
+      "saved": 89894,
+      "dollars": 0.2697
     },
     {
       "turn": 42,
       "raw": 105870,
-      "compacted": 12978,
-      "saved": 92892,
-      "dollars": 0.2787
+      "compacted": 13029,
+      "saved": 92841,
+      "dollars": 0.2785
     },
     {
       "turn": 43,
       "raw": 109187,
-      "compacted": 13310,
-      "saved": 95877,
-      "dollars": 0.2876
+      "compacted": 13361,
+      "saved": 95826,
+      "dollars": 0.2875
     },
     {
       "turn": 44,
       "raw": 112518,
-      "compacted": 13600,
-      "saved": 98918,
-      "dollars": 0.2968
+      "compacted": 13651,
+      "saved": 98867,
+      "dollars": 0.2966
     },
     {
       "turn": 45,
       "raw": 115862,
-      "compacted": 13901,
-      "saved": 101961,
-      "dollars": 0.3059
+      "compacted": 13952,
+      "saved": 101910,
+      "dollars": 0.3057
     },
     {
       "turn": 46,
       "raw": 119219,
-      "compacted": 14344,
-      "saved": 104875,
-      "dollars": 0.3146
+      "compacted": 14401,
+      "saved": 104818,
+      "dollars": 0.3145
     },
     {
       "turn": 47,
       "raw": 122589,
-      "compacted": 14709,
-      "saved": 107880,
-      "dollars": 0.3236
+      "compacted": 14766,
+      "saved": 107823,
+      "dollars": 0.3235
     },
     {
       "turn": 48,
       "raw": 125972,
-      "compacted": 15051,
-      "saved": 110921,
-      "dollars": 0.3328
+      "compacted": 15108,
+      "saved": 110864,
+      "dollars": 0.3326
     },
     {
       "turn": 49,
       "raw": 129368,
-      "compacted": 15351,
-      "saved": 114017,
-      "dollars": 0.3421
+      "compacted": 15408,
+      "saved": 113960,
+      "dollars": 0.3419
     },
     {
       "turn": 50,
       "raw": 132779,
-      "compacted": 15662,
-      "saved": 117117,
-      "dollars": 0.3514
+      "compacted": 15719,
+      "saved": 117060,
+      "dollars": 0.3512
     }
   ],
   "initial_sources": {
@@ -3597,9 +3608,9 @@
   ],
   "final": {
     "raw_bloated_tokens": 132779,
-    "compacted_okf_tokens": 15662,
-    "tokens_saved": 117117,
-    "dollars_saved": 0.3514,
+    "compacted_okf_tokens": 15719,
+    "tokens_saved": 117060,
+    "dollars_saved": 0.3512,
     "omissions_blocked": 2,
     "kernel_turns": 99,
     "savings_pct": 88.2

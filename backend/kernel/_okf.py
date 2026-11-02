@@ -54,27 +54,34 @@ def harvest_invariants(source: str) -> list[str]:
 def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str]) -> ModuleInfo:
     """Parse one module into its OKF facts. Raises SyntaxError on broken source.
     `project_modules` maps importable dotted names to node ids (see module_map);
-    a plain set of flat module names is accepted for backwards compatibility."""
+    a plain set of flat module names is accepted for backwards compatibility.
+    Decorators are fingerprinted twice: once per module (`@name`) and once per
+    symbol (`@name on symbol`), so dropping `@fixture` from one function is an
+    omission even while a sibling still carries it."""
     tree = ast.parse(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
     preserved: list[str] = []
+
+    def keep_decorators(stmt: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+        for dec in stmt.decorator_list:
+            name = ast.unparse(dec).split("(")[0]
+            for sym in (f"@{name}", f"@{name} on {stmt.name}"):
+                if sym not in preserved:
+                    preserved.append(sym)
 
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if not stmt.name.startswith("_"):
                 exports.append(_signature(stmt))
                 preserved.append(f"def {stmt.name}")
-            for dec in stmt.decorator_list:
-                name = ast.unparse(dec).split("(")[0]
-                sym = f"@{name}"
-                if sym not in preserved:
-                    preserved.append(sym)
+            keep_decorators(stmt)
         elif isinstance(stmt, ast.ClassDef):
             if not stmt.name.startswith("_"):
                 bases = ", ".join(ast.unparse(b) for b in stmt.bases)
                 exports.append(f"class {stmt.name}({bases})" if bases else f"class {stmt.name}")
                 preserved.append(f"class {stmt.name}")
+            keep_decorators(stmt)
 
     records = _import_records(node_id, path, tree, modules)
     deps = sorted({nid for nid, _name, _local in records})
@@ -510,19 +517,21 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
     clauses (`if <cond on one parameter>: raise <Exc>`), synthesize a callable
     invariant `call:fn(param=value, …) raises Exc` with arguments that trip
     that guard. Stops at the first non-guard statement; skips anything it
-    cannot synthesize deterministically."""
+    cannot synthesize deterministically. Flexible signatures are fine:
+    positional-only parameters are passed positionally, required keyword-only
+    ones get typed mocks, and `*args` / `**kwargs` are left empty — on the wild
+    corpus most `is None` / `not x` guards sit on exactly such functions."""
     out: list[str] = []
     for fn in tree.body:
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         a = fn.args
-        if a.posonlyargs or a.vararg or a.kwonlyargs or a.kwarg:
-            continue
-        params = {p.arg: p for p in a.args}
+        positional = a.posonlyargs + a.args
+        params = {p.arg: p for p in positional + a.kwonlyargs}
         if not params:
             continue
-        n_defaults = len(a.defaults)
-        required = [p.arg for p in a.args[: len(a.args) - n_defaults]]
+        required = {p.arg for p in positional[: len(positional) - len(a.defaults)]}
+        required |= {p.arg for p, d in zip(a.kwonlyargs, a.kw_defaults) if d is None}
         body = fn.body
         if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
             body = body[1:]  # docstring
@@ -535,13 +544,17 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
             if exc is None or hit is None:
                 continue
             name, value = hit
-            kwargs: list[str] = []
-            for p in a.args:
+            # Positional-only: everything up to the violating parameter (or the
+            # required prefix, whichever is longer) must be passed in order.
+            hit_pos = next((i for i, p in enumerate(a.posonlyargs) if p.arg == name), -1)
+            n_pos = max(hit_pos + 1, sum(1 for p in a.posonlyargs if p.arg in required))
+            args = [value if p.arg == name else mock_value(p) for p in a.posonlyargs[:n_pos]]
+            for p in a.args + a.kwonlyargs:
                 if p.arg == name:
-                    kwargs.append(f"{p.arg}={value}")
+                    args.append(f"{p.arg}={value}")
                 elif p.arg in required:
-                    kwargs.append(f"{p.arg}={mock_value(p)}")
-            inv = f"call:{fn.name}({', '.join(kwargs)}) raises {exc}"
+                    args.append(f"{p.arg}={mock_value(p)}")
+            inv = f"call:{fn.name}({', '.join(args)}) raises {exc}"
             if inv not in out:
                 out.append(inv)
     return out
@@ -660,4 +673,21 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
         out.setdefault(nid, set())
         if name is not None:
             out[nid].add(name)
+    return out
+
+
+def _signatures(source: str) -> dict[str, str]:
+    """Top-level name -> signature for every def and class, `_private` ones
+    included: the contract a dependent that spells `from m import _name` relies
+    on, which `exports` (public names only) does not cover."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    out: dict[str, str] = {}
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[stmt.name] = _signature(stmt)
+        elif isinstance(stmt, ast.ClassDef):
+            out[stmt.name] = f"class {stmt.name}({', '.join(ast.unparse(b) for b in stmt.bases)})"
     return out

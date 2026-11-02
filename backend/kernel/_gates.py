@@ -17,19 +17,45 @@ def required_export_names(dependent_source: str, target_module: str) -> set[str]
 
 
 def _bound_names(tree: ast.Module) -> set[str]:
-    """Every name bound at module top level: defs, classes, assignments, imports."""
+    """Every name bound at module top level: defs, classes, assignments, imports —
+    including those bound inside top-level `if` / `try` / `with` blocks (version
+    shims and optional imports are exports too) and the strings a module lists
+    in `__all__`, which a lazy package serves through a module-level
+    `__getattr__` without ever binding them (pydantic's `__init__`)."""
     names: set[str] = set()
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(stmt.name)
-        elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-            for t in targets:
-                names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
-        elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            for alias in stmt.names:
-                if alias.name != "*":
-                    names.add(alias.asname or alias.name.split(".")[0])
+
+    def visit(stmts) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(stmt.name)
+            elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                for t in targets:
+                    names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+                value = getattr(stmt, "value", None)
+                if (any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets)
+                        and isinstance(value, (ast.List, ast.Tuple))):
+                    names.update(
+                        e.value for e in value.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    )
+            elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                for alias in stmt.names:
+                    if alias.name != "*":
+                        names.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(stmt, ast.If):
+                visit(stmt.body)
+                visit(stmt.orelse)
+            elif isinstance(stmt, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+                visit(stmt.body)
+                for handler in stmt.handlers:
+                    visit(handler.body)
+                visit(stmt.orelse)
+                visit(stmt.finalbody)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                visit(stmt.body)
+
+    visit(tree.body)
     return names
 
 
@@ -45,7 +71,9 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
     """Omission detection: symbol fingerprinting + mass-deletion guard.
 
     Raises kernel.OmissionError. `allow_deletion=True` declares the deletion
-    and bypasses both checks (GLOSSARY: Gate B).
+    and bypasses both checks (GLOSSARY: Gate B). When several fingerprints are
+    missing, the per-symbol one (`@dec on name`) is reported: it says which
+    def or class lost its decorator.
     """
     from . import OmissionError, _okf
 
@@ -55,8 +83,9 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
     staged_symbols = set(staged_info.preserved_symbols)
     dropped = [s for s in node.info.preserved_symbols if s not in staged_symbols]
     if dropped:
+        named = [s for s in dropped if " on " in s]
         raise OmissionError(
-            f"preserved symbol '{dropped[0]}' of '{node.info.node_id}' was silently "
+            f"preserved symbol '{(named or dropped)[0]}' of '{node.info.node_id}' was silently "
             f"dropped from the staged source",
             subtype="INTRA_NODE_SYMBOL_DROPPED",
         )
@@ -76,7 +105,9 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
 
     Raises kernel.MechanicalError on: locked mutation, syntax error, or a name a
     dependent imports from this module (absolute or relative, through packages)
-    going missing from the staged module's top level.
+    going missing from the staged module's top level. A module that defines a
+    module-level `__getattr__` can serve any name, so the missing-export check
+    does not apply to it.
     """
     from . import MechanicalError, _okf  # local import: avoid cycle at module load
 
@@ -93,6 +124,8 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     modules = _okf.module_map(paths)
     staged = _okf.analyze(node_id, paths.get(node_id, f"{node_id}.py"), source, modules)
     bound = export_names(staged.exports) | _bound_names(tree)
+    if "__getattr__" in bound:
+        return tree
     for dep_id, dep_node in nodes.items():
         if dep_id == node_id or node_id not in dep_node.info.deps:
             continue
@@ -149,13 +182,23 @@ def _fill_new_required(expr: str, tree: ast.Module) -> str:
 
 
 def _raises(fn, exc_name: str, ns: dict) -> bool:
+    import inspect
+
     from . import _sandbox
 
     exc_type = ns.get(exc_name) or getattr(builtins, exc_name, None)
     if not isinstance(exc_type, type):
         raise NameError(f"unknown exception type {exc_name!r}")
     try:
-        _complete(fn())  # an `async def` hands back a coroutine: run it so its guard fires
+        value = _complete(fn())  # an `async def` hands back a coroutine: run it so its guard fires
+        # A generator's leading guard fires on its first step, not on the call.
+        if inspect.isgenerator(value):
+            next(value, None)
+        elif inspect.isasyncgen(value):
+            try:
+                _complete(value.__anext__())
+            except StopAsyncIteration:
+                pass
     except _sandbox.ExecutionBudgetExceeded:
         raise
     except exc_type:
@@ -227,7 +270,11 @@ def gate_c(
     Sugar: `call:<expr> raises <Exc>` ≡ `raises(lambda: <expr>, "<Exc>")`
     with `<expr>` evaluated inside `ns`. Auto-mined `call:` invariants also get
     typed mocks for any required parameters the staged signature added.
-    A falsy result, or any exception, is a kernel.LogicalError.
+    Budgets: loading the module runs under the wall clock only
+    (`_sandbox.IMPORT_WALL_BUDGET_SECONDS`) — real packages execute far more
+    than the step budget at import time; each invariant call then runs under
+    the full step + clock guard. A falsy result, or any exception, is a
+    kernel.LogicalError.
     """
     from . import LogicalError, _sandbox
 
@@ -240,11 +287,13 @@ def gate_c(
             ns = _sandbox.guarded(
                 lambda: _sandbox.load_namespace(
                     node_id, staged_source, project_sources or {}, project_paths
-                )
+                ),
+                steps=None,
+                seconds=_sandbox.IMPORT_WALL_BUDGET_SECONDS,
             )
         except _sandbox.ExecutionBudgetExceeded as exc:
             raise LogicalError(
-                f"staged module '{node_id}' blew the Gate C execution budget while "
+                f"staged module '{node_id}' blew the Gate C import budget while "
                 f"loading ({exc}) — runaway code at import time"
             )
         except Exception as exc:

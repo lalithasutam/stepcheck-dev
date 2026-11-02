@@ -447,15 +447,25 @@ class StateKernel:
         sent_tokens: int,
     ) -> CommitVerdict:
         exports_changed = staged_info.exports != node.info.exports
+        # `exports` covers public names; a dependent that spells
+        # `from m import _helper` relies on that private signature just as much.
+        before, after = _okf._signatures(node.info.source), _okf._signatures(staged_info.source)
+        modules = self._modules(s)
         node.info = staged_info
         node.status = VERIFIED
 
         dirtied: list[str] = []
-        if exports_changed:
-            for dep_id, dep in sorted(s.nodes.items()):
-                if node.info.node_id in dep.info.deps and dep_id != node.info.node_id:
-                    dep.status = DIRTY
-                    dirtied.append(dep_id)
+        for dep_id, dep in sorted(s.nodes.items()):
+            if dep_id == node.info.node_id or node.info.node_id not in dep.info.deps:
+                continue
+            if not exports_changed:
+                imported = _okf.resolve_imports(
+                    dep_id, dep.info.path, dep.info.source, modules
+                ).get(node.info.node_id, set())
+                if not any(n.startswith("_") and before.get(n) != after.get(n) for n in imported):
+                    continue
+            dep.status = DIRTY
+            dirtied.append(dep_id)
 
         commit_ordinal = 1 + sum(1 for e in s.events if e["kind"] == "commit")
         envelope = _dsse_envelope(
