@@ -26,13 +26,14 @@ Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 ## Run (turnkey)
 
 ```bash
-pip install -e .            # installs the `stepcheck` CLI
+pipx install git+https://github.com/lalithasutam/stepcheck-dev   # the `stepcheck` CLI, no clone needed
+pip install -e .            # …or from a clone (editable)
 (cd frontend && npm install && npm run build)   # once: compiled Studio served at /studio
 stepcheck up                # one port (:8420): Studio UI + Door 1 proxy + REST + MCP + WS
 stepcheck benchmark         # 50-turn coding-rot benchmark
 stepcheck review            # architecture-review.html
 stepcheck preview           # stepcheck-studio-preview.html (self-contained replay)
-stepcheck audit             # audit your own Claude Code sessions → stepcheck-audit.html
+stepcheck audit             # your own cache-cliff waste + Read-tool bloat, no server needed → stepcheck-audit.html
 stepcheck ci backend        # headless gate: parse + attestations + Gates A/B/C for every module (CI/PR)
 ```
 
@@ -87,3 +88,16 @@ curl -s localhost:8420/v1/messages \
 mock internal modules, AST parsers, YAML validators, or hash functions. Tests
 hit Seam 1 / Seam 2 only, against concrete non-tautological fixtures
 (hand-written projects, hand-calculated telemetry numbers).
+
+## Security model
+
+Gate C exec-loads the agent's staged module in an isolated namespace under a step/time guard so
+callable invariants can run against it. That is an isolated namespace, **not a security sandbox**:
+run the gateway in a container when the agent is untrusted. Python projects only for now.
+
+## License
+
+Apache-2.0 — see `LICENSE` and `NOTICE`. Everything in this repository is the open core (kernel,
+gates, MCP server, BYOK proxy, Studio, `stepcheck ci` and `stepcheck audit`). If StepCheck gets real
+use, the paid product will be a team layer (shared attestation ledger, org-wide CI gate); the core
+stays open.

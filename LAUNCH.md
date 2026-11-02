@@ -4,33 +4,31 @@ Every number below is read from the repo as it stands, not rounded up:
 
 | Metric | Value | Source |
 | --- | --- | --- |
-| Kernel + gateway | see `wc -l backend/kernel/*.py backend/server.py` (≈1,900 LOC after the mining + audit pass) | `wc -l` |
+| Kernel + gateway + CLI + audit | ≈2,975 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
+| License | Apache-2.0 (`LICENSE`, `NOTICE`, `pyproject.toml`); the whole repo is the open core | `LICENSE` |
 | Tests | 95, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~3–14 s depending on OS (includes the live 50-turn benchmark gate and a real uvicorn MCP round-trip) | `python -m pytest -q` |
 | 50-turn benchmark | 132,779 raw → 15,662 compacted tokens, 88.2% saved, $0.3514 at $3.00/MTok | `benchmarks/results.json` |
 | Real-log audit | 116 Claude Code sessions, 5,330 assistant turns, 67 cache-cliff resumes re-writing 4,950,678 tokens, $13.37 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
 
-Don't quote 88.7%, 88.5% or 0.29s anywhere. Those were earlier runs; the T25 signature-change turn costs a little more than an append, and the suite now runs the benchmark itself.
+Don't quote 88.7%, 88.5%, 0.29s, "1,700 LOC", "32 tests" or "59 tests" anywhere. Those were earlier runs and earlier suites; the T25 signature-change turn costs a little more than an append, and the suite now runs the benchmark itself. Don't put a percentage in a title.
 
 ---
 
 ## 1. Show HN
 
-**Title (80 chars):**
+**Title (80 chars; no percentage in the title):**
 Show HN: StepCheck – AST skeletons and 3 commit gates vs. agent context rot
 
-**Alt title:**
-Show HN: Cut a coding agent's context bill 88% and catch the turn-35 regression
-
-**Post:**
+**Post** (order: the problem → your own bill → how it works → the benchmark with its caveat → try it → limits → the ask → license):
 
 I kept watching long agent sessions go bad the same way. Around turn 30 the model quietly deletes a decorator it stopped reading, the tests it still runs pass, and the bill is climbing because every turn re-reads every file. If you're past Anthropic's 5-minute cache window between turns (real refactors are), you pay full input rate for all of it again.
 
-I measured it on my own logs: across 116 real Claude Code sessions and 5,330 assistant turns, `stepcheck audit` found $13.37 paid above cache-read price on turns resumed after the cache expired. In the repo's 50-turn benchmark, StepCheck cuts tokens by 88.2%, and 59 passing tests at the public seams back the kernel.
+I measured the bill half on my own logs. `stepcheck audit` reads the Claude Code transcripts under `~/.claude/projects`: across 116 sessions and 5,330 assistant turns, 67 turns resumed after the cache had expired and re-wrote 4.95M tokens of context at full rate — $13.37 above cache-read price — and 1.6M tokens were pulled with the Read tool where the same files as AST skeletons would have been 0.4M. The anonymized receipt is linked below.
 
 StepCheck is a small deterministic layer between the agent and the model that fixes both halves.
 
-Context: the repo gets compiled into an OKF graph, one Markdown frame per module with strict YAML frontmatter (exports, deps, preserved symbols, invariants, attestations). The agent checks out one node at a time. With `focus=[charge]` it gets that function verbatim and the rest of the module as an AST skeleton: signatures, decorators, docstrings, bodies replaced with `...`, runs of constants folded to one line. Dependencies come as interface skeletons only. The agent commits a patch of AST ops (append / replace_symbol / delete_symbol) and the kernel folds it into canonical state. Telemetry charges the patch, not the module. Over the 50-turn benchmark that's 132,779 raw tokens vs 15,662 sent. 88.2%.
+Context: the repo gets compiled into an OKF graph, one Markdown frame per module with strict YAML frontmatter (exports, deps, preserved symbols, invariants, attestations). The agent checks out one node at a time. With `focus=[charge]` it gets that function verbatim and the rest of the module as an AST skeleton: signatures, decorators, docstrings, bodies replaced with `...`, runs of constants folded to one line. Dependencies come as interface skeletons only. The agent commits a patch of AST ops (append / replace_symbol / delete_symbol) and the kernel folds it into canonical state. Telemetry charges the patch, not the module.
 
 Correctness: every commit runs three gates before it lands.
 - Gate A, mechanical: parses, exported names dependents import still exist, locked modules refuse everything.
@@ -41,13 +39,31 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-What I'd like feedback on: the invariant language (string, AST, callable, is that the right ladder?), and whether anyone has a long-session trace they'd let me run through the gates.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 15,662 tokens where the raw agent sends 132,779 (88.2% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 95 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
-Repo and a zero-install interactive replay of the benchmark (scrub turns, watch the graph go amber at T25, red at T20/T35/T36):
+Try it in 60 seconds (the audit needs no server and prints your own number):
+
+    pipx install git+https://github.com/lalithasutam/stepcheck-dev
+    stepcheck audit        # your cache-cliff waste + Read-tool bloat from ~/.claude/projects
+    stepcheck up           # then: claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/
+
+Honest limits: Gate C exec-loads the agent's staged module in an isolated namespace under a step/time guard — that is not a security sandbox, so run the gateway in a container for untrusted agents. Python projects only for now. And the benchmark is mine.
+
+What I'd like feedback on: the invariant ladder (string over normalized `src` → AST → callable `call:` form — is that the right shape?), and your own `stepcheck audit` numbers: sessions, turns, dollars above cache-read, Read-tool tokens vs skeletons. There's a pinned Discussion for receipts; please don't post raw transcripts, they contain your code.
+
+Apache-2.0. If this gets real use, the paid thing will be a team layer (shared attestation ledger, org-wide CI gate); the core stays open.
 
 - Repo: https://github.com/lalithasutam/stepcheck-dev
 - 50-turn interactive replay: https://lalithasutam.github.io/stepcheck-dev/ (jump to a moment: [T20](https://lalithasutam.github.io/stepcheck-dev/#t20), [T25](https://lalithasutam.github.io/stepcheck-dev/#t25), [T35](https://lalithasutam.github.io/stepcheck-dev/#t35), [T36](https://lalithasutam.github.io/stepcheck-dev/#t36))
 - 116-session anonymized audit receipt: https://lalithasutam.github.io/stepcheck-dev/audit.html
+
+**First comment (post it within minutes of the submission):**
+
+Author here. Two things up front so nobody has to dig for them. (1) The 88.2% is my own synthetic benchmark; the number I'd trust more is the audit of my real sessions ($13.37 of cache-cliff re-writes across 116 sessions), and `stepcheck audit` will print yours in under a minute with no server. (2) Gate C executes the agent's staged code in-process behind a step/time guard; it isn't a sandbox — containerize for untrusted agents. What I most want from this thread: is string → AST → callable the right invariant ladder, and what does your audit say? Receipts (numbers, not transcripts) in the pinned Discussion.
+
+**If asked about price:** "Per-seat for teams, free for individuals and open-source projects, no price set yet — the team layer isn't built."
+
+**Posting plan:** Monday 2026-11-02, 13:30 UTC (19:00 IST / 9:30 ET). Six hours blocked for replies. X thread +1 h linking the HN thread, Reddit +1 day. Success = one stranger posts an audit receipt.
 
 ---
 
@@ -70,11 +86,11 @@ C logical (invariants over normalized src, the AST, and the exec-loaded module)
 
 6/ T25 is the one I like. Legit signature change on payments.charge. Accepted. But api and workers go amber (DIRTY_OMISSION_RISK) and finalize is refused until both are re-verified. The thing agents never do on their own.
 
-7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. 1,700 LOC, 32 tests at two seams, no mocks of internals.
+7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~3,000 LOC, 95 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
 
 8/ Try the interactive replay, no install, works on your phone: https://lalithasutam.github.io/stepcheck-dev/
-Repo: [repo link]
-`pip install -e . && stepcheck up` gives you the proxy, MCP server and Studio UI on one port.
+Repo: https://github.com/lalithasutam/stepcheck-dev
+`pipx install git+https://github.com/lalithasutam/stepcheck-dev && stepcheck audit` prints your own cache-cliff number; `stepcheck up` gives you the proxy, MCP server and Studio UI on one port.
 
 ### r/ClaudeAI · r/cursor post
 
