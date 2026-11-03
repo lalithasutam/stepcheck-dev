@@ -1,26 +1,32 @@
 """Claude Code lifecycle hooks evaluated against a warm StateKernel.
 
-`decide(event, kernel)` is the whole policy. It is served by `DualDoorGateway`
-as `POST /v1/step/hook` (the warm fast path the installed hook script relays
+decide(event, kernel) is the whole policy. It is served by DualDoorGateway
+as POST /v1/step/hook (the warm fast path the installed hook script relays
 to) and callable offline by the CLI, so both paths give the same answer.
 
-Contract (Claude Code hooks; verified in `~/.claude/skills/update-config` and
-the official `plugin-dev/hook-development` skill): the hook receives one JSON
-object (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`,
-`stop_hook_active`, …). For `PreToolUse` the decision is
-`{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision":
-"allow" | "deny" | "ask", "permissionDecisionReason": …, "additionalContext": …}}`;
-for `Stop` it is `{"decision": "block", "reason": …}`; an empty object means
+Contract (Claude Code hooks; verified in ~/.claude/skills/update-config and
+the official plugin-dev/hook-development skill): the hook receives one JSON
+object (hook_event_name, session_id, cwd, 	ool_name, 	ool_input,
+stop_hook_active, ...). For PreToolUse the decision is
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision":
+"allow" | "deny" | "ask", "permissionDecisionReason": ..., "additionalContext": ...}};
+for Stop it is {"decision": "block", "reason": ...}; an empty object means
 "no opinion" and the tool / stop proceeds.
 
 Policy:
-- PreToolUse `Read` of a tracked Python module whose raw text exceeds the
-  token threshold: deny, and hand back the `focus=[]` OKF skeleton as
-  `additionalContext` — orientation at skeleton cost instead of the whole file.
-- PreToolUse `Edit` / `Write` / `MultiEdit` / `NotebookEdit` of a LOCKED module:
-  deny with the Gate A diagnostic the kernel itself produces.
-- `Stop`: block while any module of the project's session holds
-  `DIRTY_OMISSION_RISK`, naming them; `stop_hook_active` short-circuits.
+- Zero-touch session auto-init: if a hook arrives for a project root with no
+  registered session yet, the kernel automatically opens one on cwd.
+- PreToolUse Read of a tracked Python/TS module whose raw text exceeds the
+  token threshold: deny unscoped full-file reads and hand back the ocus=[]
+  OKF skeleton as dditionalContext; allow scoped line-slice reads
+  (limit <= 120) so agents can inspect individual symbol spans directly.
+- PreToolUse Edit / Write / MultiEdit / NotebookEdit:
+  - on a LOCKED module: deny with the Gate A diagnostic.
+  - on an active tracked module when edit content is supplied: stage the edit
+    and verify through Gates A, B, and C before bytes land on disk; deny on any
+    gate violation so the agent self-corrects on the next turn.
+- Stop: block while any module of the project's session holds
+  DIRTY_OMISSION_RISK, naming them; stop_hook_active short-circuits.
 Everything else is allowed silently.
 """
 from __future__ import annotations
@@ -29,15 +35,16 @@ import json
 import os
 from pathlib import Path
 
-from kernel import StateKernel, _tokens
+from kernel import StateKernel, _okf, _tokens
 
 DEFAULT_READ_THRESHOLD = 1500
+SCOPED_READ_MAX_LINES = 120
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 def registry() -> dict[str, str]:
-    """session_id -> project root, from the per-user registry (`STEPCHECK_HOME`
-    overrides `~/.stepcheck`, exactly as the kernel reads it)."""
+    """session_id -> project root, from the per-user registry (STEPCHECK_HOME
+    overrides ~/.stepcheck, exactly as the kernel reads it)."""
     home = Path(os.environ.get("STEPCHECK_HOME") or Path.home() / ".stepcheck")
     try:
         data = json.loads((home / "sessions.json").read_text(encoding="utf-8"))
@@ -47,7 +54,7 @@ def registry() -> dict[str, str]:
 
 
 def sessions_for(path: Path) -> list[tuple[str, Path]]:
-    """Registered sessions whose root contains `path` (or equals it), oldest first."""
+    """Registered sessions whose root contains path (or equals it), oldest first."""
     path = path.resolve()
     out = []
     for sid, root in registry().items():
@@ -57,7 +64,7 @@ def sessions_for(path: Path) -> list[tuple[str, Path]]:
     return out
 
 
-def _session(event: dict, path: Path | None) -> tuple[str, Path] | None:
+def _session(event: dict, path: Path | None, kernel: StateKernel | None = None) -> tuple[str, Path] | None:
     explicit = event.get("stepcheck_session_id")
     if explicit:
         root = registry().get(explicit)
@@ -65,7 +72,15 @@ def _session(event: dict, path: Path | None) -> tuple[str, Path] | None:
     if path is None:
         return None
     found = sessions_for(path)
-    return found[-1] if found else None  # the newest session wins
+    if found:
+        return found[-1]  # the newest session wins
+    if kernel is not None and event.get("auto_init", True):
+        cwd_raw = event.get("cwd")
+        root = Path(cwd_raw).resolve() if cwd_raw else path.resolve().parent
+        if root.is_dir() and (path.resolve() == root or root in path.resolve().parents) and _okf.tracked_files(root):
+            sid = kernel.init_session(root)
+            return sid, root
+    return None
 
 
 def _node_for(kernel: StateKernel, sid: str, root: Path, target: Path) -> dict | None:
@@ -82,14 +97,61 @@ def _deny(reason: str, context: str | None = None) -> dict:
     return {"hookSpecificOutput": out}
 
 
+def _has_edit_payload(tool: str, tool_input: dict) -> bool:
+    if tool == "Write":
+        return isinstance(tool_input.get("content"), str)
+    if tool == "Edit":
+        old_s, new_s = tool_input.get("old_string"), tool_input.get("new_string")
+        return isinstance(old_s, str) and isinstance(new_s, str) and bool(old_s) and old_s != new_s
+    if tool == "MultiEdit":
+        return isinstance(tool_input.get("edits"), list) and bool(tool_input.get("edits"))
+    return False
+
+
+def _stage_edit(tool: str, tool_input: dict, current: str) -> str | None:
+    """Compute the staged full-module source for a native Edit/Write/MultiEdit
+    call, or None when the tool input does not specify an applicable mutation."""
+    if tool == "Write":
+        content = tool_input.get("content")
+        return content if isinstance(content, str) and content != current else None
+    if tool == "Edit":
+        old_s = tool_input.get("old_string")
+        new_s = tool_input.get("new_string")
+        if not isinstance(old_s, str) or not isinstance(new_s, str) or not old_s or old_s == new_s:
+            return None
+        if old_s not in current:
+            return None
+        if tool_input.get("replace_all"):
+            return current.replace(old_s, new_s)
+        return current.replace(old_s, new_s, 1)
+    if tool == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list) or not edits:
+            return None
+        staged = current
+        for item in edits:
+            if not isinstance(item, dict):
+                return None
+            old_s = item.get("old_string")
+            new_s = item.get("new_string")
+            if not isinstance(old_s, str) or not isinstance(new_s, str) or not old_s or old_s not in staged:
+                return None
+            staged = staged.replace(old_s, new_s) if item.get("replace_all") else staged.replace(old_s, new_s, 1)
+        return staged if staged != current else None
+    return None
+
+
 def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
     tool = event.get("tool_name")
     tool_input = event.get("tool_input") or {}
     file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not file_path:
         return {}
-    target = Path(str(file_path))
-    found = _session(event, target)
+    try:
+        target = Path(str(file_path))
+    except (TypeError, ValueError):
+        return {}
+    found = _session(event, target, kernel)
     if found is None:
         return {}
     sid, root = found
@@ -97,19 +159,27 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
     if node is None:
         return {}  # not a tracked module: the tool is fine
     if tool == "Read":
+        limit = tool_input.get("limit")
+        if limit is not None:
+            try:
+                if 0 < int(limit) <= SCOPED_READ_MAX_LINES:
+                    return {}  # bounded symbol slice read is allowed
+            except (TypeError, ValueError):
+                pass
         threshold = int(event.get("threshold") or DEFAULT_READ_THRESHOLD)
         raw_tokens = node["source_tokens"]
         if raw_tokens <= threshold:
             return {}
         payload = kernel.checkout(sid, node["node_id"], focus=[])
         context = (
-            f"StepCheck context firewall: raw Read of `{node['path']}` ({raw_tokens:,} tokens) was replaced by "
-            f"its OKF skeleton ({payload.token_count:,} tokens). Session `{sid}`, node `{node['node_id']}`. "
-            "To see a body verbatim call checkout_context_frame(session_id, node_id, focus=[<symbol>]); "
-            "edit through commit_verified_step patches.\n\n" + payload.rendered()
+            f"StepCheck context firewall: raw Read of {node['path']} ({raw_tokens:,} tokens) was replaced by "
+            f"its OKF skeleton ({payload.token_count:,} tokens). Session {sid}, node {node['node_id']}. "
+            "To see a body verbatim call checkout_context_frame(session_id, node_id, focus=[<symbol>]) "
+            f"or Read with offset/limit (<= {SCOPED_READ_MAX_LINES} lines); "
+            "edits are automatically verified through Gates A/B/C.\n\n" + payload.rendered()
         )
         return _deny(
-            f"StepCheck: `{node['path']}` is a tracked module of session {sid} "
+            f"StepCheck: {node['path']} is a tracked module of session {sid} "
             f"({raw_tokens:,} tokens > {threshold:,}); its AST skeleton was supplied instead.",
             context,
         )
@@ -117,6 +187,16 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
         verdict = kernel.commit(sid, node["node_id"], source=kernel.node_source(sid, node["node_id"]))  # Gate A speaks for itself
         reason = str(verdict.error) if verdict.error else f"node '{node['node_id']}' is LOCKED"
         return _deny(f"StepCheck Gate A: {reason}. Unlock it or edit through the gates.")
+    if tool in EDIT_TOOLS and _has_edit_payload(tool, tool_input):
+        current = kernel.node_source(sid, node["node_id"])
+        staged = _stage_edit(tool, tool_input, current)
+        if staged is not None:
+            verdict = kernel.commit(sid, node["node_id"], source=staged)
+            if not verdict.accepted:
+                return _deny(
+                    f"StepCheck Gate {verdict.gate}: {verdict.error}. "
+                    "Fix the violation (preserve required exports, decorators, and guard invariants) and retry the edit."
+                )
     return {}
 
 
@@ -148,7 +228,7 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
 
 
 def decide(event: dict, kernel: StateKernel) -> dict:
-    """The hook answer for one lifecycle event, or `{}` for "no opinion"."""
+    """The hook answer for one lifecycle event, or {} for "no opinion"."""
     name = event.get("hook_event_name") or ("Stop" if "stop_hook_active" in event else "PreToolUse")
     if name == "Stop":
         return _stop(event, kernel)

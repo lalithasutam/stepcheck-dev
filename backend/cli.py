@@ -321,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
     hk.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
     hk.set_defaults(fn=cmd_hooks)
 
+    cn = sub.add_parser("connect", help="zero-touch setup: install Claude Code hooks, wire .mcp.json, and initialize the project session")
+    cn.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
+    cn.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
+    cn.set_defaults(fn=cmd_connect)
+
     cp = sub.add_parser("compliance", help="export the dual-use compliance bundle: DUC.json (public card, hashes and "
                                          "counts only) + DUA-E.json (escrowed in-toto envelopes and control mappings)")
     cp.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
@@ -550,6 +555,34 @@ def main() -> int:
 if __name__ == '__main__':
     sys.exit(main())
 '''
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    """stepcheck connect [path]: one-command zero-touch setup. Installs Claude Code
+    hooks (.claude/hooks + .claude/settings.json), wires .mcp.json for streamable-http
+    MCP, and initializes a persistent StepCheck session on the project root."""
+    import json
+    from kernel import StateKernel
+
+    rc = cmd_hooks(args)
+    root = Path(args.path).resolve()
+    mcp_path = root / ".mcp.json"
+    try:
+        mcp_data = json.loads(mcp_path.read_text(encoding="utf-8")) if mcp_path.exists() else {}
+    except ValueError:
+        mcp_data = {}
+    if not isinstance(mcp_data, dict):
+        mcp_data = {}
+    servers = mcp_data.setdefault("mcpServers", {})
+    base_url = args.url.split("/v1/step/hook")[0]
+    servers["stepcheck"] = {"type": "http", "url": f"{base_url}/mcp/"}
+    rendered = json.dumps(mcp_data, indent=2) + "\n"
+    if not mcp_path.exists() or mcp_path.read_text(encoding="utf-8") != rendered:
+        mcp_path.write_text(rendered, encoding="utf-8", newline="\n")
+    sid = StateKernel().init_session(root)
+    print(f"  .mcp.json: wired stepcheck -> {base_url}/mcp/")
+    print(f"  session  : initialized {sid} on {root}")
+    return rc
 
 
 def cmd_hooks(args: argparse.Namespace) -> int:

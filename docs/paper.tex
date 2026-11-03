@@ -1,0 +1,603 @@
+% Generated 2026-11-03 by .stepcheck/discovery/verify_integrity.py from execution receipts.
+\documentclass{article}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\title{StepCheck: a deterministic context firewall and gated state engine for AI coding agents}
+\begin{document}
+\maketitle
+\begin{abstract}
+Long agent sessions degrade in two coupled ways: the context re-read every turn grows until attention over it decays, and silent omissions pass the tests the agent still runs. StepCheck interposes a deterministic kernel between agent and model: modules are compiled into OKF frames, checked out as AST skeletons with a chosen focus, and modified only through patches that must pass three gates before a DSSE attestation lands. We evaluate on 9 installed packages (387 files, 152,176 LOC) and on the kernel's own repository; the 50-turn benchmark sends 16,081 tokens where a raw agent sends 132,779 (87.9\% saved).
+\end{abstract}
+\section{Evaluation}
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+metric & value \\
+\midrule
+precision & 100.0\% \\
+recall & 100.0\% \\
+false positive rate & 0.0\% \\
+\bottomrule
+\end{tabular}
+\caption{PASS\\_TO\\_PASS fault matrix on the 387-file corpus.}
+\label{tab:prf}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+context source & tokens & saved vs raw \\
+\midrule
+(b) raw Read of all tracked modules & 36,215 & — \\
+(a) CLAUDE.md compliance, focus on the largest symbol & 22,904 & 36.8\% \\
+(c) hook-enforced skeleton for modules over the threshold & 16,792 & 53.6\% \\
+(d) pure focus=[] skeleton & 15,114 & 58.3\% \\
+\bottomrule
+\end{tabular}
+\caption{Per-turn context cost on the repository's own modules.}
+\label{tab:tokens}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lllll}
+\toprule
+phase & n & p50 & p95 & p99 \\
+\midrule
+parse & 499 & 1.5 ms & 18.5 ms & 51.2 ms \\
+analyze & 499 & 5.9 ms & 80.5 ms & 141.4 ms \\
+skeleton & 499 & 1.8 ms & 26.3 ms & 67.1 ms \\
+checkout\_focus\_empty & 499 & 8.7 ms & 115.4 ms & 193.7 ms \\
+gate\_a & 498 & 18.8 ms & 176.7 ms & 269.0 ms \\
+gate\_b & 498 & 4.2 ms & 73.6 ms & 126.7 ms \\
+gate\_c & 498 & 3.3 ms & 45.3 ms & 95.7 ms \\
+commit\_append & 498 & 61.2 ms & 464.2 ms & 837.5 ms \\
+\bottomrule
+\end{tabular}
+\caption{Per-phase kernel latency across the installed corpus, nearest-rank percentiles recomputed from the per-module receipt (ephemeral kernel, Windows, single machine).}
+\label{tab:latency}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+AST pattern & occurrences \\
+\midrule
+overload chains & 93 \\
+property pairs & 33 \\
+comment between decorator and def & 0 \\
+async generators & 48 \\
+match blocks & 25 \\
+duplicate top level defs & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Symbol-addressing hazards found in the installed corpus.}
+\label{tab:patterns}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+property & examples & counterexamples \\
+\midrule
+\_okf.apply\_patch & 200 & 0 \\
+mine\_guard\_invariants → gate\_c & 72 & 0 \\
+\_sandbox.guarded & 200 & see recursion row \\
+\bottomrule
+\end{tabular}
+\caption{Hypothesis property runs (seed 20261103).}
+\label{tab:fuzz}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+hook & p50 & p95 \\
+\midrule
+Read guard, deny path & 375.4 ms & 432.2 ms \\
+Read guard, allow path & 302.8 ms & 373.2 ms \\
+Stop guard, dirty session & 270.6 ms & 281.9 ms \\
+Stop guard, clean session & 272.0 ms & 275.7 ms \\
+\bottomrule
+\end{tabular}
+\caption{Lifecycle-hook latency (fresh interpreter per invocation).}
+\label{tab:hooks}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+figure & published & re-derived \\
+\midrule
+sessions & 116 & 122 \\
+assistant turns & 5,330 & 6,389 \\
+cache gap turns & 67 & 82 \\
+gap rebilled tokens & 4,950,678 & 5,335,876 \\
+gap waste usd & $13.37 & $14.41 \\
+\bottomrule
+\end{tabular}
+\caption{Real-transcript audit: the published receipt versus the same parser over every transcript present at run time.}
+\label{tab:audit}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lllllll}
+\toprule
+scenario & baseline & save 50 & save 80 & save 95 & BE Pro & BE Team \\
+\midrule
+all turns · frontier=sonnet · cheap=haiku 4 5 & $96.74 & $22.57 & $51.59 & $66.10 & 56.6\% & 34.9\% \\
+all turns · frontier=sonnet · cheap=local ollama vllm & $96.74 & $48.37 & $77.39 & $91.90 & 30.0\% & 8.2\% \\
+all turns · frontier=opus · cheap=haiku 4 5 & $483.69 & $216.05 & $361.16 & $433.71 & 11.3\% & 7.0\% \\
+all turns · frontier=opus · cheap=local ollama vllm & $483.69 & $241.85 & $386.96 & $459.51 & 6.0\% & 1.6\% \\
+edit turns only · frontier=sonnet · cheap=haiku 4 5 & $96.74 & $3.49 & $7.99 & $10.23 & none & 79.8\% \\
+edit turns only · frontier=sonnet · cheap=local ollama vllm & $96.74 & $7.49 & $11.98 & $14.23 & none & 53.2\% \\
+edit turns only · frontier=opus · cheap=haiku 4 5 & $483.69 & $33.44 & $55.91 & $67.14 & 44.1\% & 16.0\% \\
+edit turns only · frontier=opus · cheap=local ollama vllm & $483.69 & $37.44 & $59.90 & $71.13 & 38.7\% & 10.6\% \\
+\bottomrule
+\end{tabular}
+\caption{Gate-backed model arbitrage on the audited developer's observed volume (assumed prices in the receipt).}
+\label{tab:arbitrage}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+tier & observed & solo / yr & 25 seats / yr \\
+\midrule
+sonnet & $14.41 & $33.03 & $825.87 \\
+opus & $72.03 & $165.17 & $4,129.33 \\
+\bottomrule
+\end{tabular}
+\caption{Cache-cliff re-write cost that bounded OKF rehydration replaces (Fable tier skipped: no public price fetched).}
+\label{tab:shield}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+asset & bytes & sha256 \\
+\midrule
+llms.txt & 4,713 & 2edc4e6063ea3349… \\
+llms-full.txt & 29,156 & 1d619b8decbbdcaa… \\
+audit-card.svg & 2,267 & a857524a986f2c44… \\
+audit-card.md & 288 & 5a9af4bc7f826ea2… \\
+launch\_matrix.md & 8,539 & 1ffc48f87635c062… \\
+\bottomrule
+\end{tabular}
+\caption{Generated GTM assets.}
+\label{tab:assets}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{llllll}
+\toprule
+slice & commits & new & re-verified & finalized & tokens saved \\
+\midrule
+slice17 & 2 & 1 & 1 & yes & 13,177 \\
+slice18 & 2 & 1 & 7 & yes & 24,502 \\
+slice19 & 1 & 1 & 0 & yes & 4,228 \\
+slice20 & 7 & 1 & 2 & yes & 51,544 \\
+slice20\_fix\_compactor\_language & 1 & 0 & 0 & yes & 0 \\
+slice18\_fix\_hook\_template\_guard & 1 & 0 & 0 & yes & 0 \\
+\bottomrule
+\end{tabular}
+\caption{v0.2 production-readiness campaign (Slices 17–20): landed through StepCheck's own gates.}
+\label{tab:dogfood17_20}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & 17 & 17 \\
+budget\_tokens & 4,000 & 4,000 \\
+corpus.files & 387 & 391 \\
+corpus.raw\_tokens & 1,392,309 & 1,411,546 \\
+corpus.b\_prime\_skeleton\_payload\_tokens & 2,374,564 & 570,703 \\
+corpus.b\_prime\_saving\_pct & -70.5\% & 59.6\% \\
+corpus.c\_prime\_files & 236 & 240 \\
+corpus.c\_prime\_raw\_tokens & 1,185,325 & 1,204,562 \\
+corpus.c\_prime\_focused\_payload\_tokens & 2,070,880 & 453,074 \\
+corpus.c\_prime\_saving\_pct & -74.7\% & 62.4\% \\
+corpus.skeleton\_over\_budget & 127 & 11 \\
+corpus.focused\_over\_budget & 119 & 22 \\
+corpus.public\_symbols & 2,152 & 2,188 \\
+corpus.public\_recalled & 2,152 & 2,188 \\
+corpus.files\_with\_backstop\_elision & 0 & 44 \\
+corpus.public\_recall\_pct & 100.0\% & 100.0\% \\
+class\_method.classes\_measured & 165 & 165 \\
+class\_method.sum\_focus\_class\_payload\_tokens & 1,868,564 & 560,675 \\
+class\_method.sum\_focus\_method\_payload\_tokens & 1,739,559 & 359,289 \\
+class\_method.aggregate\_saving\_vs\_class\_focus\_pct & 6.9\% & 35.9\% \\
+class\_method.median\_saving\_vs\_class\_focus\_pct & 3.9\% & 17.9\% \\
+class\_method.method\_body\_rendered & 165 & 165 \\
+class\_method.method\_over\_budget & 84 & 20 \\
+own\_backend.server\_raw\_tokens & 5,030 & 6,151 \\
+own\_backend.server\_focus\_build\_mcp\_payload\_tokens & 3,637 & 2,743 \\
+own\_backend.server\_saving\_pct & 27.7\% & 55.4\% \\
+own\_backend.server\_dependency\_skeleton\_chars.backend.kernel.\_\_init\_\_ & 4,203 & 1,100 \\
+own\_backend.statekernel\_focus\_class\_payload\_tokens & 7,635 & 5,718 \\
+own\_backend.statekernel\_focus\_commit\_payload\_tokens & 4,856 & 2,076 \\
+own\_backend.statekernel\_method\_vs\_class\_saving\_pct & 36.4\% & 63.7\% \\
+\bottomrule
+\end{tabular}
+\caption{Slice 17: receipts before and after landing.}
+\label{tab:slice17}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & 18 & 18 \\
+subprocess\_hooks\_track2.read\_guard\_deny\_p50\_ms & 375.4 ms & 375.4 ms \\
+subprocess\_hooks\_track2.read\_guard\_deny\_p95\_ms & 432.2 ms & 432.2 ms \\
+subprocess\_hooks\_track2.stop\_guard\_dirty\_p50\_ms & 270.6 ms & 270.6 ms \\
+subprocess\_hooks\_track2.stop\_guard\_dirty\_p95\_ms & 281.9 ms & 281.9 ms \\
+warm\_endpoint.stop\_clean.n & 50 & 50 \\
+warm\_endpoint.stop\_clean.p50\_ms & 6.3 ms & 7.8 ms \\
+warm\_endpoint.stop\_clean.p95\_ms & 7.7 ms & 9.6 ms \\
+warm\_endpoint.stop\_clean.p99\_ms & 8.1 ms & 10.1 ms \\
+warm\_endpoint.stop\_clean.max\_ms & 8.1 ms & 10.1 ms \\
+warm\_endpoint.stop\_clean.response\_tokens\_hint & n/a & 0 \\
+warm\_endpoint.read\_deny\_server\_py.n & 50 & 50 \\
+warm\_endpoint.read\_deny\_server\_py.p50\_ms & 7.0 ms & 70.1 ms \\
+warm\_endpoint.read\_deny\_server\_py.p95\_ms & 7.9 ms & 125.9 ms \\
+warm\_endpoint.read\_deny\_server\_py.p99\_ms & 12.0 ms & 133.9 ms \\
+warm\_endpoint.read\_deny\_server\_py.max\_ms & 12.0 ms & 133.9 ms \\
+warm\_endpoint.read\_deny\_server\_py.response\_tokens\_hint & n/a & 2,416 \\
+warm\_endpoint.read\_allow\_small.n & 50 & 50 \\
+warm\_endpoint.read\_allow\_small.p50\_ms & 7.0 ms & 12.5 ms \\
+warm\_endpoint.read\_allow\_small.p95\_ms & 8.6 ms & 13.8 ms \\
+warm\_endpoint.read\_allow\_small.p99\_ms & 10.2 ms & 14.4 ms \\
+warm\_endpoint.read\_allow\_small.max\_ms & 10.2 ms & 14.4 ms \\
+warm\_endpoint.read\_allow\_small.response\_tokens\_hint & n/a & 0 \\
+warm\_endpoint.edit\_unlocked.n & 50 & 50 \\
+warm\_endpoint.edit\_unlocked.p50\_ms & 7.8 ms & 15.1 ms \\
+warm\_endpoint.edit\_unlocked.p95\_ms & 9.0 ms & 17.0 ms \\
+warm\_endpoint.edit\_unlocked.p99\_ms & 9.4 ms & 18.9 ms \\
+warm\_endpoint.edit\_unlocked.max\_ms & 9.4 ms & 18.9 ms \\
+warm\_endpoint.edit\_unlocked.response\_tokens\_hint & n/a & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 18: receipts before and after landing.}
+\label{tab:slice18}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+endpoints.openai.status & 200 & 200 \\
+endpoints.openai.raw\_tokens & 9,685 & 13,920 \\
+endpoints.openai.sent\_tokens & 474 & 2,015 \\
+endpoints.openai.compaction.pruned\_messages & — & 3 \\
+endpoints.openai.compaction.folded\_messages & — & 0 \\
+endpoints.openai.compaction.tokens\_before & — & 13,912 \\
+endpoints.openai.compaction.tokens\_after & — & 1,546 \\
+endpoints.openai.compaction.saved\_pct & — & 88.9\% \\
+endpoints.openai.all\_turn\_prompt\_reduction\_pct & 95.1\% & 85.5\% \\
+endpoints.anthropic.status & 200 & 200 \\
+endpoints.anthropic.raw\_tokens & 9,677 & 13,912 \\
+endpoints.anthropic.sent\_tokens & 466 & 2,007 \\
+endpoints.anthropic.compaction.pruned\_messages & — & 3 \\
+endpoints.anthropic.compaction.folded\_messages & — & 0 \\
+endpoints.anthropic.compaction.tokens\_before & — & 13,912 \\
+endpoints.anthropic.compaction.tokens\_after & — & 1,546 \\
+endpoints.anthropic.compaction.saved\_pct & — & 88.9\% \\
+endpoints.anthropic.all\_turn\_prompt\_reduction\_pct & 95.2\% & 85.6\% \\
+finops\_v2.measured.sessions & 126 & 126 \\
+finops\_v2.measured.assistant\_turns & 6,672 & 6,672 \\
+finops\_v2.measured.cache\_gap\_turns & 84 & 84 \\
+finops\_v2.measured.gap\_rebilled\_tokens & 5,694,058 & 5,694,058 \\
+finops\_v2.measured.turns\_with\_middle\_band\_saving & 3,774 & 3,774 \\
+finops\_v2.measured.middle\_band\_saving\_tokens\_total & 59,636,494 & 59,636,494 \\
+finops\_v2.measured.middle\_band\_saving\_pct\_of\_prompt\_tokens & 4.1\% & 4.1\% \\
+finops\_v2.measured.prompt\_tokens\_total & 1,450,942,728 & 1,450,942,728 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=haiku\_4\_5.solo\_monthly\_baseline\_usd & $105.12 & $105.12 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=haiku\_4\_5.compaction\_only\_saving\_pct & 6.1\% & 6.1\% \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=haiku\_4\_5.break\_even\_pass\_rate\_pro\_29 & 0.50 & 0.50 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=haiku\_4\_5.break\_even\_pass\_rate\_team\_199 & 0.28 & 0.28 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=local\_ollama\_vllm.solo\_monthly\_baseline\_usd & $105.12 & $105.12 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=local\_ollama\_vllm.compaction\_only\_saving\_pct & 6.1\% & 6.1\% \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=local\_ollama\_vllm.break\_even\_pass\_rate\_pro\_29 & 0.23 & 0.23 \\
+finops\_v2.scenarios.combined|frontier=sonnet|cheap=local\_ollama\_vllm.break\_even\_pass\_rate\_team\_199 & 0.02 & 0.02 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=haiku\_4\_5.solo\_monthly\_baseline\_usd & $525.61 & $525.61 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=haiku\_4\_5.compaction\_only\_saving\_pct & 6.1\% & 6.1\% \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=haiku\_4\_5.break\_even\_pass\_rate\_pro\_29 & 0.05 & 0.05 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=haiku\_4\_5.break\_even\_pass\_rate\_team\_199 & 0.00 & 0.00 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=local\_ollama\_vllm.solo\_monthly\_baseline\_usd & $525.61 & $525.61 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=local\_ollama\_vllm.compaction\_only\_saving\_pct & 6.1\% & 6.1\% \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=local\_ollama\_vllm.break\_even\_pass\_rate\_pro\_29 & 0.00 & 0.00 \\
+finops\_v2.scenarios.combined|frontier=opus|cheap=local\_ollama\_vllm.break\_even\_pass\_rate\_team\_199 & 0.00 & 0.00 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 19: receipts before and after landing.}
+\label{tab:slice19}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & — & 20 \\
+summary.files\_on\_disk & — & 12 \\
+summary.nodes\_indexed & — & 12 \\
+summary.loc & — & 962 \\
+summary.raw\_tokens & — & 12,293 \\
+summary.skeleton\_tokens & — & 4,123 \\
+summary.compaction\_pct & — & 66.5\% \\
+summary.export\_recall\_pct & — & 100.0\% \\
+summary.edges & — & 19 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 20: receipts before and after landing.}
+\label{tab:slice20}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{llllll}
+\toprule
+slice & commits & new & re-verified & finalized & tokens saved \\
+\midrule
+slice21 & 4 & 0 & 2 & yes & 20,843 \\
+slice22 & 2 & 0 & 0 & yes & 7,061 \\
+slice23 & 5 & 4 & 3 & yes & 64,867 \\
+slice24 & 3 & 4 & 9 & yes & 61,024 \\
+slice21\_fix\_statekernel\_floor & 1 & 0 & 0 & yes & 0 \\
+slice25 & 1 & 0 & 0 & yes & 1,994 \\
+slice25\_r2 & 1 & 0 & 0 & yes & 5,704 \\
+\bottomrule
+\end{tabular}
+\caption{v0.3 overnight campaign (Slices 21–25): landed through StepCheck's own gates.}
+\label{tab:dogfood21_25}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & 21 & 21 \\
+budget\_tokens & 4,000 & 4,000 \\
+hooks.project\_modules & 10 & 10 \\
+hooks.denied\_module\_tokens & 6,151 & 6,853 \\
+hooks.read\_deny\_first\_call\_ms & 67.3 ms & 42.3 ms \\
+hooks.read\_deny\_p50\_ms & 41.9 ms & 9.1 ms \\
+hooks.read\_deny\_p95\_ms & 92.0 ms & 9.8 ms \\
+hooks.read\_deny\_n & 50 & 50 \\
+hooks.stop\_p50\_ms & 7.7 ms & 8.3 ms \\
+hooks.stop\_p95\_ms & 8.4 ms & 9.1 ms \\
+hooks.edit\_unlocked\_p50\_ms & 8.9 ms & 8.8 ms \\
+hooks.edit\_unlocked\_p95\_ms & 10.3 ms & 9.9 ms \\
+hooks.read\_allow\_small\_p50\_ms & 9.6 ms & 8.8 ms \\
+hooks.read\_allow\_small\_p95\_ms & 10.3 ms & 9.8 ms \\
+hooks.turns\_charged\_in\_memory & 51 & 51 \\
+hooks.turns\_visible\_to\_a\_fresh\_kernel\_before\_flush & 51 & 0 \\
+corpus.files & 391 & 399 \\
+corpus.raw\_tokens & 1,411,546 & 1,441,112 \\
+corpus.b\_prime\_skeleton\_payload\_tokens & 570,703 & 529,030 \\
+corpus.b\_prime\_saving\_pct & 59.6\% & 63.3\% \\
+corpus.c\_prime\_files & 240 & 248 \\
+corpus.c\_prime\_raw\_tokens & 1,204,562 & 1,234,128 \\
+corpus.c\_prime\_focused\_payload\_tokens & 453,074 & 392,979 \\
+corpus.c\_prime\_saving\_pct & 62.4\% & 68.2\% \\
+corpus.skeleton\_over\_budget & 11 & 0 \\
+corpus.focused\_over\_budget & 22 & 13 \\
+corpus.public\_symbols & 2,188 & 2,290 \\
+corpus.public\_recalled & 2,188 & 2,290 \\
+corpus.files\_with\_backstop\_elision & 44 & 45 \\
+corpus.public\_recall\_pct & 100.0\% & 100.0\% \\
+class\_method.classes\_measured & 165 & 165 \\
+class\_method.sum\_focus\_class\_payload\_tokens & 560,675 & 453,925 \\
+class\_method.sum\_focus\_method\_payload\_tokens & 359,289 & 244,032 \\
+class\_method.aggregate\_saving\_vs\_class\_focus\_pct & 35.9\% & 46.2\% \\
+class\_method.median\_saving\_vs\_class\_focus\_pct & 17.9\% & 23.8\% \\
+class\_method.method\_body\_rendered & 165 & 165 \\
+class\_method.method\_over\_budget & 20 & 5 \\
+class\_method.payloads\_with\_folded\_sibling\_runs & 0 & 73 \\
+own\_backend.server\_raw\_tokens & 6,151 & 6,852 \\
+own\_backend.server\_focus\_build\_mcp\_payload\_tokens & 2,743 & 2,318 \\
+own\_backend.server\_saving\_pct & 55.4\% & 66.2\% \\
+own\_backend.statekernel\_focus\_class\_payload\_tokens & 5,718 & 6,797 \\
+own\_backend.statekernel\_focus\_commit\_payload\_tokens & 2,076 & 2,054 \\
+own\_backend.statekernel\_method\_vs\_class\_saving\_pct & 63.7\% & 69.8\% \\
+\bottomrule
+\end{tabular}
+\caption{Slice 21: receipts before and after landing.}
+\label{tab:slice21}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+fixtures.anthropic.messages & 15 & 15 \\
+fixtures.anthropic.tokens\_before & 20,443 & 20,443 \\
+fixtures.anthropic.tokens\_after & 15,846 & 1,848 \\
+fixtures.anthropic.saved\_pct & 22.5\% & 91.0\% \\
+fixtures.anthropic.blocks\_skeletonized & 0 & 2 \\
+fixtures.anthropic.logs\_elided & 0 & 2 \\
+fixtures.anthropic.line\_prefixes\_stripped & 0 & 399 \\
+fixtures.anthropic.languages.python & — & 1 \\
+fixtures.anthropic.languages.typescript & — & 1 \\
+fixtures.anthropic.pruned\_messages & 0 & 0 \\
+fixtures.anthropic.compaction\_ms\_p50 & 20.0 ms & 8.4 ms \\
+fixtures.anthropic.compaction\_ms\_p95 & 48.2 ms & 13.6 ms \\
+fixtures.openai.messages & 16 & 16 \\
+fixtures.openai.tokens\_before & 20,443 & 20,443 \\
+fixtures.openai.tokens\_after & 15,846 & 1,848 \\
+fixtures.openai.saved\_pct & 22.5\% & 91.0\% \\
+fixtures.openai.blocks\_skeletonized & 0 & 2 \\
+fixtures.openai.logs\_elided & 0 & 2 \\
+fixtures.openai.line\_prefixes\_stripped & 0 & 399 \\
+fixtures.openai.languages.python & — & 1 \\
+fixtures.openai.languages.typescript & — & 1 \\
+fixtures.openai.pruned\_messages & 0 & 0 \\
+fixtures.openai.compaction\_ms\_p50 & 19.6 ms & 8.2 ms \\
+fixtures.openai.compaction\_ms\_p95 & 48.7 ms & 8.4 ms \\
+\bottomrule
+\end{tabular}
+\caption{Slice 22: receipts before and after landing.}
+\label{tab:slice22}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & 23 & 23 \\
+typescript.files & 12 & 12 \\
+typescript.loc & 950 & 950 \\
+typescript.raw\_tokens & 7,442 & 7,442 \\
+typescript.skeleton\_tokens & 1,146 & 1,146 \\
+typescript.compaction\_pct & 84.6\% & 84.6\% \\
+typescript.declaration\_recall\_pct & 100.0\% & 100.0\% \\
+typescript.member\_symbols & 0 & 0 \\
+typescript.mined\_guards & 0 & 0 \\
+typescript.edges & 19 & 19 \\
+go.files & 0 & 2 \\
+go.loc & 0 & 206 \\
+go.raw\_tokens & 0 & 1,258 \\
+go.skeleton\_tokens & 0 & 174 \\
+go.compaction\_pct & n/a & 86.2\% \\
+go.declaration\_recall\_pct & n/a & 100.0\% \\
+go.member\_symbols & 0 & 10 \\
+go.mined\_guards & 0 & 5 \\
+go.edges & 0 & 1 \\
+rust.files & 0 & 2 \\
+rust.loc & 0 & 203 \\
+rust.raw\_tokens & 0 & 1,369 \\
+rust.skeleton\_tokens & 0 & 231 \\
+rust.compaction\_pct & n/a & 83.1\% \\
+rust.declaration\_recall\_pct & n/a & 100.0\% \\
+rust.member\_symbols & 0 & 15 \\
+rust.mined\_guards & 0 & 10 \\
+rust.edges & 0 & 1 \\
+java.files & 0 & 2 \\
+java.loc & 0 & 170 \\
+java.raw\_tokens & 0 & 1,177 \\
+java.skeleton\_tokens & 0 & 75 \\
+java.compaction\_pct & n/a & 93.6\% \\
+java.declaration\_recall\_pct & n/a & 100.0\% \\
+java.member\_symbols & 0 & 24 \\
+java.mined\_guards & 0 & 8 \\
+java.edges & 0 & 1 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 23: receipts before and after landing.}
+\label{tab:slice23}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & — & 24 \\
+tiers.free.usd\_per\_month & — & $0.00 \\
+tiers.pro.usd\_per\_month & — & $19.00 \\
+tiers.team.usd\_per\_seat\_month & — & $39.00 \\
+tiers.enterprise.usd\_per\_seat\_month & — & $79.00 \\
+tiers.enterprise.usd\_per\_year\_self\_hosted & — & $25,000.00 \\
+summary\_latency\_no\_enforcement.n & — & 50 \\
+summary\_latency\_no\_enforcement.p50\_ms & — & 8.0 ms \\
+summary\_latency\_no\_enforcement.p95\_ms & — & 9.0 ms \\
+summary\_latency\_no\_enforcement.max\_ms & — & 55.3 ms \\
+hook\_stop\_latency\_no\_enforcement.n & — & 50 \\
+hook\_stop\_latency\_no\_enforcement.p50\_ms & — & 8.4 ms \\
+hook\_stop\_latency\_no\_enforcement.p95\_ms & — & 9.4 ms \\
+hook\_stop\_latency\_no\_enforcement.max\_ms & — & 10.0 ms \\
+summary\_latency\_enforced.n & — & 50 \\
+summary\_latency\_enforced.p50\_ms & — & 7.9 ms \\
+summary\_latency\_enforced.p95\_ms & — & 8.5 ms \\
+summary\_latency\_enforced.max\_ms & — & 8.6 ms \\
+hook\_stop\_latency\_enforced.n & — & 50 \\
+hook\_stop\_latency\_enforced.p50\_ms & — & 8.5 ms \\
+hook\_stop\_latency\_enforced.p95\_ms & — & 9.2 ms \\
+hook\_stop\_latency\_enforced.max\_ms & — & 9.5 ms \\
+door1\_402\_latency.n & — & 50 \\
+door1\_402\_latency.p50\_ms & — & 6.0 ms \\
+door1\_402\_latency.p95\_ms & — & 6.8 ms \\
+door1\_402\_latency.max\_ms & — & 7.1 ms \\
+summary\_sessions & — & 1 \\
+compliance\_bundle\_ms & — & 28.1 ms \\
+bundle\_bytes.DUC & — & 913 \\
+bundle\_bytes.DUA-E & — & 5,462 \\
+duc\_leak\_check.paths & — & 0 \\
+duc\_leak\_check.code & — & 0 \\
+duc\_attestations & — & 1 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 24: receipts before and after landing.}
+\label{tab:slice24}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+metric & before & after \\
+\midrule
+slice & — & 25 \\
+fuzzer.rounds & — & 4 \\
+fuzzer.examples\_total & — & 12,716 \\
+fuzzer.examples\_last\_round & — & 3,860 \\
+fuzzer.counterexamples\_total & — & 32 \\
+fuzzer.counterexamples\_last\_round & — & 0 \\
+fuzzer.counterexample\_classes\_fixed & — & 2 \\
+fuzzer.languages & — & 6 \\
+fuzzer.seconds\_last\_round & — & 50.50 \\
+red.tests & — & 47 \\
+red.failed\_before\_fix & — & 3 \\
+red.landing\_rounds & — & 2 \\
+journeys.checks & — & 36 \\
+journeys.checks\_passed & — & 36 \\
+journeys.checks\_failed & — & 0 \\
+journeys.journey1\_seconds & — & 9.60 \\
+journeys.journey1\_transcripts & — & 131 \\
+journeys.journey1\_forbidden\_terms & — & 137 \\
+journeys.journey1\_card\_bytes & — & 2,225 \\
+journeys.journey2\_stop\_p50\_ms & — & 7.2 ms \\
+journeys.journey2\_stop\_p95\_ms & — & 7.5 ms \\
+journeys.journey2\_read\_deny\_p50\_ms & — & 8.3 ms \\
+journeys.journey2\_read\_deny\_p95\_ms & — & 9.1 ms \\
+journeys.journey2\_nodes\_indexed & — & 6 \\
+journeys.journey3\_door1\_warm\_ms & — & 102.3 ms \\
+journeys.journey3\_door1\_cliff\_ms & — & 57.7 ms \\
+journeys.journey3\_blocks\_skeletonized & — & 2 \\
+journeys.journey3\_logs\_elided & — & 2 \\
+journeys.journey3\_warm\_saved\_pct & — & 91.0\% \\
+journeys.journey3\_cliff\_saved\_pct & — & 99.0\% \\
+journeys.journey3\_team\_sessions & — & 2 \\
+journeys.journey3\_duc\_bytes & — & 992 \\
+journeys.journey3\_duae\_bytes & — & 5,854 \\
+\bottomrule
+\end{tabular}
+\caption{Slice 25: receipts before and after landing.}
+\label{tab:slice25}
+\end{table}
+\begin{table}[h]
+\centering
+\begin{tabular}{llllll}
+\toprule
+slice & commits & new & re-verified & finalized & tokens saved \\
+\midrule
+v031\_privacy & 2 & 0 & 0 & yes & 6,703 \\
+v031\_tests\_slice24 & 1 & 0 & 0 & yes & 0 \\
+v031\_tests\_audit & 1 & 0 & 0 & yes & 0 \\
+v031\_hook\_cost & 1 & 0 & 0 & yes & 0 \\
+v031\_tests\_slice21 & 1 & 0 & 0 & yes & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Privacy fixes release (whole-token leak check, abbreviated audit paths): landed through StepCheck's own gates.}
+\label{tab:dogfoodv031}
+\end{table}
+\section{Reproducibility}
+python -m pytest -q (235 passed); stepcheck ci . (68 modules verified); the discovery scripts under .stepcheck/discovery/.
+\end{document}
