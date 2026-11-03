@@ -1,4 +1,5 @@
 """`stepcheck audit` — CLI boundary against the bundled sample transcript (no mocks)."""
+import re
 from pathlib import Path
 
 import cli
@@ -54,3 +55,26 @@ def test_receipt_never_leaks_the_home_directory(tmp_path, monkeypatch, capsys):
     for text in (html, terminal):
         assert str(tmp_path) not in text and tmp_path.as_posix() not in text
     assert " · " in html
+
+
+def test_receipt_never_prints_an_absolute_path_for_an_explicit_target(tmp_path, monkeypatch, capsys):
+    """Regression: an explicit log directory outside both the home directory and the
+    working directory was printed raw (drive letter, absolute local path) in the page
+    subtitle and the terminal. It is shown abbreviated to its last two components."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    logs = tmp_path / "elsewhere" / "transcripts"
+    logs.mkdir(parents=True)
+    (logs / "session.jsonl").write_bytes(FIXTURE.read_bytes())
+    out = tmp_path / "receipt.html"
+
+    assert cli.main(["audit", str(logs), "--out", str(out)]) == 0
+
+    html = out.read_text(encoding="utf-8")
+    terminal = capsys.readouterr().out
+    for text in (html, terminal):
+        assert str(tmp_path) not in text and tmp_path.as_posix() not in text
+        assert re.search(r"(?<![A-Za-z])[A-Za-z]:[\\/]|/tmp/|/home/|/Users/", text) is None
+        assert "under …/elsewhere/transcripts" in text

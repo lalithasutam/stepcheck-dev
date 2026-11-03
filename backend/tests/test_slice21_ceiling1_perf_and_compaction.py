@@ -161,6 +161,34 @@ def test_hook_read_deny_with_a_real_skeleton_checkout_is_under_25ms_p95(client, 
     assert _p95(fast) < 25, fast
 
 
+def test_gate_a_rejection_on_a_locked_node_does_not_re_render_the_project(tmp_path):
+    """Regression: the probe commit behind an Edit deny on a locked node (made so that
+    Gate A speaks for itself) ran the full flush on rejection, re-rendering every OKF
+    frame of the project, so the deny cost grew with the module count. A rejection on
+    a locked node changes no frame: it records the event, persists the session and
+    leaves the checkout memo alone."""
+    big = (BACKEND / "server.py").read_text(encoding="utf-8").replace("from kernel import", "from kernelx import")
+    for i in range(30):
+        (tmp_path / f"big{i}.py").write_text(big, encoding="utf-8", newline="\n")
+    kernel = StateKernel()
+    sid = kernel.init_session(tmp_path)
+    kernel.lock_node(sid, "big0")
+    source = kernel.node_source(sid, "big0")
+    first = kernel.commit(sid, "big0", source=source)
+    assert not first.accepted and first.gate == "A"
+
+    samples = []
+    for _ in range(10):
+        started = time.perf_counter()
+        assert kernel.commit(sid, "big0", source=source).gate == "A"
+        samples.append((time.perf_counter() - started) * 1000)
+    assert statistics.median(samples) < 40, samples
+
+    fresh = StateKernel()  # the rejections are on the record for a fresh process, the node still locked
+    assert sum(1 for e in fresh.events(sid) if e["kind"] == "reject") == 11
+    assert next(n for n in fresh.graph(sid)["nodes"] if n["node_id"] == "big0")["status"] == "LOCKED"
+
+
 # ------------------------- 3. dotted focus: sibling collapse, import scoping
 
 

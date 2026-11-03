@@ -342,10 +342,16 @@ code{{font:12.5px var(--mono)}}.ok{{color:var(--ok)}}.bad{{color:var(--bad)}}.di
 
 
 def display_path(path: Path) -> str:
-    """Shareable form of a path: forward slashes, home directory shown as `~`,
-    so receipts never carry an OS username."""
-    try:
-        relative = path.resolve().relative_to(Path.home().resolve())
-    except ValueError:
-        return path.as_posix()
-    return "~" if relative == Path() else f"~/{relative.as_posix()}"
+    """Shareable form of a path: forward slashes; the home directory shown as `~`;
+    a path under the working directory shown as `./…`; anything else reduced to
+    its last two components under `…/`, so receipts never carry an OS username,
+    a drive letter or an absolute local path."""
+    resolved = path.resolve()
+    for root, prefix in ((Path.home(), "~"), (Path.cwd(), ".")):
+        try:
+            relative = resolved.relative_to(root.resolve())
+        except ValueError:
+            continue
+        return prefix if relative == Path() else f"{prefix}/{relative.as_posix()}"
+    parts = [p for p in resolved.parts if p != resolved.anchor]
+    return "…/" + "/".join(parts[-2:]) if parts else "…"

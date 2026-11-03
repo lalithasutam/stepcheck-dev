@@ -4,11 +4,11 @@ Every number below is read from the repo as it stands, not rounded up:
 
 | Metric | Value | Source |
 | --- | --- | --- |
-| Kernel + gateway + CLI + audit | ≈7,370 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
+| Kernel + gateway + CLI + audit | ≈7,400 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
 | License | Apache-2.0 (`LICENSE`, `NOTICE`, `pyproject.toml`); the whole repo is the open core | `LICENSE` |
-| Tests | 229, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
+| Tests | 232, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
 | 50-turn benchmark | 132,779 raw → 16,081 compacted tokens, 87.9% saved, $0.3501 at $3.00/MTok | `benchmarks/results.json` |
-| Real-log audit | 131 Claude Code sessions, 7,412 assistant turns, 93 cache-cliff resumes re-writing 5,715,365 tokens, $15.43 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
+| Real-log audit | 131 Claude Code sessions, 7,612 assistant turns, 95 cache-cliff resumes re-writing 5,876,819 tokens, $15.87 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
 
 Don't quote 88.7%, 88.5%, 0.29s, "1,700 LOC", "32 tests" or "59 tests" anywhere. Those were earlier runs and earlier suites; the T25 signature-change turn costs a little more than an append, and the suite now runs the benchmark itself. Don't put a percentage in a title.
@@ -58,7 +58,7 @@ Show HN: StepCheck – AST skeletons and 3 commit gates vs. agent context rot
 
 I kept watching long agent sessions go bad the same way. Around turn 30 the model quietly deletes a decorator it stopped reading, the tests it still runs pass, and the bill is climbing because every turn re-reads every file. If you're past Anthropic's 5-minute cache window between turns (real refactors are), you pay full input rate for all of it again.
 
-I measured the bill half on my own logs. `stepcheck audit` reads the Claude Code transcripts under `~/.claude/projects`: across 131 sessions and 7,412 assistant turns, 93 turns resumed after the cache had expired and re-wrote 5.72M tokens of context at full rate — $15.43 above cache-read price — and 1.6M tokens were pulled with the Read tool where the same files as AST skeletons would have been 0.4M. The anonymized receipt is linked below.
+I measured the bill half on my own logs. `stepcheck audit` reads the Claude Code transcripts under `~/.claude/projects`: across 131 sessions and 7,612 assistant turns, 95 turns resumed after the cache had expired and re-wrote 5.88M tokens of context at full rate — $15.87 above cache-read price — and 1.6M tokens were pulled with the Read tool where the same files as AST skeletons would have been 0.4M. The anonymized receipt is linked below.
 
 StepCheck is a small deterministic layer between the agent and the model that fixes both halves.
 
@@ -73,7 +73,7 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 16,081 tokens where the raw agent sends 132,779 (87.9% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 229 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 16,081 tokens where the raw agent sends 132,779 (87.9% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 232 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
@@ -93,7 +93,7 @@ Apache-2.0. If this gets real use, the paid thing will be a team layer (shared a
 
 **First comment (post it within minutes of the submission):**
 
-Author here. Two things up front so nobody has to dig for them. (1) The 87.9% is my own synthetic benchmark; the number I'd trust more is the audit of my real sessions ($15.43 of cache-cliff re-writes across 131 sessions), and `stepcheck audit` will print yours in under a minute with no server. (2) Gate C executes the agent's staged code in-process behind a step/time guard; it isn't a sandbox — containerize for untrusted agents. What I most want from this thread: is string → AST → callable the right invariant ladder, and what does your audit say? Receipts (numbers, not transcripts) in the pinned Discussion.
+Author here. Two things up front so nobody has to dig for them. (1) The 87.9% is my own synthetic benchmark; the number I'd trust more is the audit of my real sessions ($15.87 of cache-cliff re-writes across 131 sessions), and `stepcheck audit` will print yours in under a minute with no server. (2) Gate C executes the agent's staged code in-process behind a step/time guard; it isn't a sandbox — containerize for untrusted agents. What I most want from this thread: is string → AST → callable the right invariant ladder, and what does your audit say? Receipts (numbers, not transcripts) in the pinned Discussion.
 
 **If asked about price:** "Per-seat for teams, free for individuals and open-source projects, no price set yet — the team layer isn't built."
 
@@ -120,7 +120,7 @@ C logical (invariants over normalized src, the AST, and the exec-loaded module)
 
 6/ T25 is the one I like. Legit signature change on payments.charge. Accepted. But api and workers go amber (DIRTY_OMISSION_RISK) and finalize is refused until both are re-verified. The thing agents never do on their own.
 
-7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 229 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
+7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 232 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
 
 8/ Try the interactive replay, no install, works on your phone: https://lalithasutam.github.io/stepcheck-dev/
 Repo: https://github.com/lalithasutam/stepcheck-dev
@@ -176,7 +176,7 @@ Link straight to a moment with the hash: `#t20`, `#t25`, `#t35`, `#t36`. Regener
 ```bash
 cd stepcheck-dev && pip install -e . && (cd frontend && npm install && npm run build) && (cd backend && python -m pytest -q) && stepcheck up
 ```
-Expect `229 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
+Expect `232 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
 
 **2. Connect Claude Code (or Cursor) to the MCP server** (second terminal)
 ```bash

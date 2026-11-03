@@ -98,8 +98,20 @@ def _strings(obj) -> list[str]:
 
 def leak_check(duc: dict, paths: list[str]) -> dict:
     """Scan every string of the card for any tracked path, its basename or stem,
-    and for code-shaped tokens. Both counts must be zero for a card to be public."""
+    and for code-shaped tokens. Both counts must be zero for a card to be public.
+    Names are matched as whole tokens (`types` does not hit `typescript`), and a
+    name the card itself always emits, a schema key or a language label, is not
+    a leak when a tracked file happens to share it."""
     text = "\n".join(_strings(duc))
+    own: set[str] = set(duc.get("languages", {}))
+    stack: list = [duc]
+    while stack:
+        obj = stack.pop()
+        if isinstance(obj, dict):
+            own.update(str(k) for k in obj)
+            stack.extend(obj.values())
+        elif isinstance(obj, list):
+            stack.extend(obj)
     names: set[str] = set()
     for p in paths:
         p = p.replace("\\", "/")
@@ -109,9 +121,12 @@ def leak_check(duc: dict, paths: list[str]) -> dict:
         stem = base.rsplit(".", 1)[0]
         if len(stem) >= 4:
             names.add(stem)
-    path_hits = sorted(n for n in names if n and n in text)
+    names -= own
+    path_hits = sorted(n for n in names if n and re.search(r"(?<![A-Za-z0-9_])" + re.escape(n) + r"(?![A-Za-z0-9_])", text))
     code_hits = _CODE_RE.findall(text)
-    return {"paths": len(path_hits), "code": len(code_hits), "method": "serialized card scanned for every tracked path, basename and stem, and for code-shaped tokens"}
+    return {"paths": len(path_hits), "code": len(code_hits),
+            "method": "serialized card scanned for every tracked path, basename and stem as whole tokens "
+                      "(the card's own keys and language labels excluded), and for code-shaped tokens"}
 
 
 def bundle(kernel, session_id: str) -> dict:

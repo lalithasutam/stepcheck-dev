@@ -294,6 +294,24 @@ def test_stepcheck_compliance_writes_both_files_deterministically(kernel, projec
     assert cli.main(["compliance", str(tmp_path / "nowhere"), "--out", str(tmp_path / "c")]) == 1
 
 
+def test_leak_check_matches_whole_names_and_ignores_the_cards_own_labels(kernel, project):
+    """Regression: a repo with `types.ts` tripped the public card's leak check because the
+    stem `types` is a substring of the card's own `typescript` language label. Tracked
+    names are matched as whole tokens, and a file whose stem equals a schema key or a
+    language label the card always emits is not a leak."""
+    (project / "types.ts").write_text("export interface User { id: string }\n", encoding="utf-8", newline="\n")
+    (project / "python.py").write_text("LIMIT = 1\n", encoding="utf-8", newline="\n")
+    sid = kernel.init_session(project)
+    assert kernel.commit(sid, "billing", patch=[{"op": "append", "code": "LIMIT = 1\n"}]).accepted
+
+    duc = kernel.compliance_bundle(sid)["DUC"]
+    assert duc["languages"] == {"python": 6, "typescript": 1}
+    assert duc["leak_check"]["paths"] == 0 and duc["leak_check"]["code"] == 0
+    card = json.dumps(duc)
+    for forbidden in ("types.ts", "python.py", "billing", str(project)):
+        assert forbidden not in card
+
+
 # ------------------------------------------------- 5. latency of the ledger
 
 

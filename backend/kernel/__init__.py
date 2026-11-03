@@ -526,7 +526,13 @@ class StateKernel:
         if gate in ("B", "C"):
             s.omissions_blocked += 1
         s.events.append({"kind": "reject", "node_id": node.info.node_id, "gate": gate})
-        self._flush(s)
+        if node.locked:
+            # Gate A on a locked node changes no frame and invalidates no checkout:
+            # keep the event on the record without re-rendering the project or
+            # dropping the payload memo (the Edit hook probes this path per call).
+            self._persist(s)
+        else:
+            self._flush(s)
         return CommitVerdict(
             accepted=False, gate=gate, error=exc, attestation=None, dirtied=[]
         )
