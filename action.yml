@@ -1,0 +1,89 @@
+name: "StepCheck gate"
+description: >-
+  Run StepCheck's headless gate on a repository: every tracked module must parse, match
+  its DSSE attestation, hold no DIRTY_OMISSION_RISK and pass Gates A/B/C; then post the
+  blast-radius and in-toto provenance checklist to the job summary and as an artifact.
+author: "StepCheck Dev"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Project root to verify (relative to the checkout)"
+    required: false
+    default: "."
+  python-version:
+    description: "Python version to run StepCheck with"
+    required: false
+    default: "3.12"
+  report-path:
+    description: "Where to write the Markdown blast-radius & provenance report"
+    required: false
+    default: "stepcheck-report.md"
+  fail-on-dirty:
+    description: "Fail the job on any gate failure or unresolved DIRTY_OMISSION_RISK (set false to warn only)"
+    required: false
+    default: "true"
+  version:
+    description: "stepcheck-dev version specifier to install from PyPI"
+    required: false
+    default: ">=0.2.0"
+
+outputs:
+  report:
+    description: "Path of the generated report"
+    value: ${{ steps.gate.outputs.report }}
+  verdict:
+    description: "PASS or FAIL"
+    value: ${{ steps.gate.outputs.verdict }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install StepCheck
+      shell: bash
+      run: python -m pip install --quiet "stepcheck-dev${{ inputs.version }}"
+
+    - name: Run the StepCheck gate and write the report
+      id: gate
+      shell: bash
+      env:
+        STEPCHECK_PATH: ${{ inputs.path }}
+        STEPCHECK_REPORT: ${{ inputs.report-path }}
+        STEPCHECK_FAIL_ON_DIRTY: ${{ inputs.fail-on-dirty }}
+      run: |
+        set -o pipefail
+        status=0
+        stepcheck ci "$STEPCHECK_PATH" --report --report-out "$STEPCHECK_REPORT" | tee stepcheck-ci.log || status=$?
+        if [ -f "$STEPCHECK_REPORT" ]; then
+          cat "$STEPCHECK_REPORT" >> "$GITHUB_STEP_SUMMARY"
+        else
+          { echo "## StepCheck gate"; echo; echo '```'; cat stepcheck-ci.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "report=$STEPCHECK_REPORT" >> "$GITHUB_OUTPUT"
+        if [ "$status" -eq 0 ]; then
+          echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+        else
+          echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
+          if [ "$STEPCHECK_FAIL_ON_DIRTY" = "true" ]; then
+            echo "::error::stepcheck ci failed (exit $status): a gate rejected a module or DIRTY_OMISSION_RISK is unresolved"
+            exit "$status"
+          fi
+          echo "::warning::stepcheck ci failed (exit $status) but fail-on-dirty is false"
+        fi
+
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: stepcheck-report
+        path: |
+          ${{ inputs.report-path }}
+          stepcheck-ci.log
+        if-no-files-found: ignore

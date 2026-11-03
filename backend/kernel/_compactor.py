@@ -161,29 +161,46 @@ class ContextCompactor:
 
     def fit(self, frame: str, dep_skeletons: dict[str, str], invariants: list[str], budget: int,
             count, render, focus: list[str] | None = None) -> tuple[str, dict[str, str], list[str]]:
-        """Bring the payload under `budget`: first drop the unreferenced sibling
-        method signatures (the focused symbol, `__init__` and methods the focus
-        uses stay; on an unfocused frame every top-level public name stays), then
-        replace the interface stubs of dependencies the focus does not reference
-        with their elision line, largest first. Returns the new frame, the new
-        dependency skeletons and a list naming what was elided (empty when nothing
-        had to go). A TypeScript frame is returned as is."""
+        """Bring the payload under `budget`, one rung at a time, stopping as soon
+        as it fits: (1) unreferenced sibling method signatures go (the focused
+        symbol, `__init__` and the methods the focus uses stay; an unfocused frame
+        keeps every top-level public name); (2) the interface stubs of
+        dependencies the focus does not reference become their elision line,
+        largest first; (3) the frontmatter lists are scoped to the focus (counts
+        stand in for the rest); then, for an unfocused frame only, (4) docstring
+        lines, `__init__` signatures and private function parameters go and
+        (5) public function parameters and the import block fold — every public
+        name still present. The payload is measured with the backstop note it
+        will carry. Returns the new frame, the new dependency skeletons and a list
+        naming what was elided (empty when nothing had to go). A TypeScript frame
+        is returned as is."""
         focus = self.focus if focus is None else focus
         elided: list[str] = []
         if focus is None or not self.python:
             return frame, dep_skeletons, elided
-        tokens = count(render(frame, dep_skeletons, invariants))
+
+        def split(f: str) -> tuple[str, str, str]:
+            head, rest = f.split("```python\n", 1)
+            body, tail = rest.rsplit("```", 1)
+            return head, body, tail
+
+        def note() -> str:
+            return f"Budget backstop ({budget:,} tokens): elided {', '.join(elided)}.\n\n" if elided else ""
+
+        def measure() -> int:  # the backstop note is part of the payload it describes
+            return count(render(frame.replace("```python\n", note() + "```python\n", 1), dep_skeletons, invariants))
+
+        tokens = measure()
         if tokens < budget:
             return frame, dep_skeletons, elided
 
-        head, rest = frame.split("```python\n", 1)
-        old_body, tail = rest.rsplit("```", 1)
-        new_body = _okf.skeleton(self.info.source, focus, elide_methods=True)
+        head, old_body, tail = split(frame)
+        new_body = _okf.skeleton(self.info.source, focus, elide_methods=True, tree=self.tree)
         dropped = len(_METHOD_RE.findall(old_body)) - len(_METHOD_RE.findall(new_body))
         if dropped > 0:
             frame = head + "```python\n" + new_body + "```" + tail
             elided.append(f"{dropped} unreferenced method signatures")
-            tokens = count(render(frame, dep_skeletons, invariants))
+            tokens = measure()
 
         dep_skeletons = dict(dep_skeletons)
         for dep in sorted(dep_skeletons, key=lambda d: -len(dep_skeletons[d])):
@@ -199,9 +216,25 @@ class ContextCompactor:
                 continue
             dep_skeletons[dep] = stub
             elided.append(f"dependency {dep} interface stub")
-            tokens = count(render(frame, dep_skeletons, invariants))
+            tokens = measure()
+
+        if tokens >= budget and frame.startswith("---\n") and "\n---\n" in frame:
+            front = frame[4: frame.index("\n---\n") + 1]
+            compacted = _okf._compact_frontmatter(front, focus)
+            if compacted != front:
+                frame = "---\n" + compacted + frame[4 + len(front):]
+                elided.append("frontmatter lists (counts kept)")
+                tokens = measure()
+
+        for level, label in ((1, "docstring lines, __init__ signatures and private function parameters"),
+                             (2, "public function parameters and the import block")):
+            if tokens < budget or focus:
+                break
+            head, _body, tail = split(frame)
+            frame = head + "```python\n" + _okf.skeleton(self.info.source, focus, elide_methods=True, compact=level, tree=self.tree) + "```" + tail
+            elided.append(label)
+            tokens = measure()
 
         if elided:
-            note = f"Budget backstop ({budget:,} tokens): elided {', '.join(elided)}.\n\n"
-            frame = frame.replace("```python\n", note + "```python\n", 1)
+            frame = frame.replace("```python\n", note() + "```python\n", 1)
         return frame, dep_skeletons, elided

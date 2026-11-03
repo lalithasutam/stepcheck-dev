@@ -159,6 +159,9 @@ class _Session:
     # frames / session files are not rewritten.
     frame_shas: dict[str, str] = field(default_factory=dict)
     persisted_sha: str = ""
+    # Not persisted either: assembled checkout payloads per (node, focus),
+    # cleared by every mutating call (see StateKernel._flush).
+    payload_cache: dict = field(default_factory=dict)
 
 
 class StateKernel:
@@ -215,54 +218,19 @@ class StateKernel:
         at: float | None = None,
     ) -> CheckoutPayload:
         """`focus=None` → full frame. `focus=[names…]` → those defs verbatim,
-        the rest of the target as an AST skeleton. `focus=[]` → pure skeleton."""
+        the rest of the target as an AST skeleton. `focus=[]` → pure skeleton.
+        Read-only on the session: the checkout is charged to telemetry in
+        memory and written out by the next mutating call (`commit`, `lock_node`,
+        `init_session`) or an explicit `flush()`; the assembled payload is
+        memoized per (node, focus) until the session mutates — the warm path a
+        lifecycle hook needs on every Read."""
         s, node = self._get(session_id, node_id)
-        dep_sigs = {
-            dep: list(s.nodes[dep].info.exports)
-            for dep in node.info.deps
-            if dep in s.nodes
-        }
-        from . import _compactor  # lazy: keeps the package import graph acyclic
-
-        compactor = _compactor.ContextCompactor(
-            node.info,
-            {dep: s.nodes[dep].info for dep in node.info.deps if dep in s.nodes},
-            self._modules(s),
-            focus,
-        )
-        dep_skeletons = compactor.dependency_skeletons()  # import-scoped, docstring-free
-        invariants = list(node.info.invariants)
-        for dep in node.info.deps:
-            if dep in s.nodes and s.nodes[dep].locked:
-                invariants.extend(s.nodes[dep].info.invariants)
-        frame = _okf.frame_markdown(
-            node.info, node.status, node.locked, node.verified,
-            focus=focus, fold_history=True,
-        )
-        rendered = _render_payload(frame, dep_skeletons, invariants)
-        tokens = _tokens.count(rendered)
-        auto = False
-        if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
-            # Unfocused frame would blow the budget: fall back to a pure AST
-            # skeleton with a symbol index so the agent can pick a focus.
-            frame = _okf.frame_markdown(
-                node.info, node.status, node.locked, node.verified,
-                focus=[], fold_history=True, symbol_index=True,
-            )
-            rendered = _render_payload(frame, dep_skeletons, invariants)
-            tokens = _tokens.count(rendered)
-            auto = True
-        elided: list[str] = []
-        if (focus is not None or auto) and tokens >= CHECKOUT_TOKEN_BUDGET:
-            # Still over budget: drop unreferenced sibling method signatures, then
-            # the interface stubs of dependencies the focus does not touch. The
-            # focused symbol and every top-level public name survive.
-            frame, dep_skeletons, elided = compactor.fit(
-                frame, dep_skeletons, invariants, CHECKOUT_TOKEN_BUDGET,
-                _tokens.count, _render_payload, focus=[] if auto else focus,
-            )
-            rendered = _render_payload(frame, dep_skeletons, invariants)
-            tokens = _tokens.count(rendered)
+        key = (node_id, None if focus is None else tuple(focus))
+        cached = s.payload_cache.get(key)
+        if cached is None:
+            cached = self._assemble(s, node, focus)
+            s.payload_cache[key] = cached
+        frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided = cached
         s.events.append(
             {
                 "kind": "checkout",
@@ -272,19 +240,19 @@ class StateKernel:
                 "at": at,
             }
         )
-        self._persist(s)
         return CheckoutPayload(
             session_id=session_id,
             node_id=node_id,
             frame_markdown=frame,
-            dependency_signatures=dep_sigs,
-            locked_invariants=invariants,
+            dependency_signatures=dict(dep_sigs),
+            locked_invariants=list(invariants),
             token_count=tokens,
-            dependency_skeletons=dep_skeletons,
+            dependency_skeletons=dict(dep_skeletons),
             focus=focus,
             auto_skeletonized=auto,
-            elided=elided,
+            elided=list(elided),
         )
+
 
     def commit(
         self,
@@ -415,6 +383,41 @@ class StateKernel:
         node.status = LOCKED
         self._flush(s)
 
+    def record_event(self, session_id: str, event: dict) -> None:
+        """Append a gateway-level event (a Door 1 turn: compaction bands, cache-cliff
+        fold, routing) to the session log, persisted with the session, so the team
+        ledger can aggregate it. Telemetry ignores kinds it does not price."""
+        s = self._session(session_id)
+        if not isinstance(event, dict) or "kind" not in event:
+            raise ValueError("an event is a dict carrying a 'kind'")
+        s.events.append(dict(event))
+        self._persist(s)
+
+    def events(self, session_id: str) -> list[dict]:
+        """The session's event log (checkouts, commits, rejections, Door 1 turns)."""
+        return [dict(e) for e in self._session(session_id).events]
+
+    def compliance_bundle(self, target: str | Path) -> dict:
+        """`DUC` (public dual-use card: hashes and counts only, self-checked for
+        path/code leakage) and `DUA-E` (escrowed enterprise bundle: every in-toto
+        Statement v1 envelope, the Merkle tree over attestation digests, control
+        mappings) for a session id or a project root (its newest registered
+        session). KeyError when nothing is registered."""
+        from . import _compliance
+
+        target_str = str(target)
+        if _is_session_id(target_str):
+            sid = target_str
+        else:
+            root = Path(target_str).resolve()
+            sid = None
+            for cand, r in self._registry().items():  # insertion order: the newest session wins
+                if Path(r).resolve() == root:
+                    sid = cand
+            if sid is None:
+                raise KeyError(f"no StepCheck session is registered for {root}")
+        return _compliance.bundle(self, sid)
+
     def provenance(self, session_id: str, node_id: str) -> dict:
         """The node's latest attestation as an in-toto Statement v1 inside a DSSE
         envelope (`payloadType: application/vnd.in-toto+json`, base64 payload):
@@ -427,6 +430,95 @@ class StateKernel:
         if not node.verified:
             raise KeyError(f"node '{node_id}' has no attestation in session '{session_id}'")
         return _in_toto_envelope(session_id, node.info, node.verified[-1]["payload"], len(node.verified))
+
+    def _assemble(self, s: _Session, node: _Node, focus: list[str] | None) -> tuple:
+        """Everything in a CheckoutPayload that does not depend on the turn:
+        (frame, dependency signatures, locked invariants, dependency skeletons,
+        token count, auto_skeletonized, elided). Pure in the session's canonical
+        state, so `checkout` memoizes it until the session mutates."""
+        dep_sigs = {
+            dep: list(s.nodes[dep].info.exports)
+            for dep in node.info.deps
+            if dep in s.nodes
+        }
+        from . import _compactor  # lazy: keeps the package import graph acyclic
+
+        compactor = _compactor.ContextCompactor(
+            node.info,
+            {dep: s.nodes[dep].info for dep in node.info.deps if dep in s.nodes},
+            self._modules(s),
+            focus,
+        )
+        dep_skeletons = compactor.dependency_skeletons()  # import-scoped, docstring-free
+        invariants = list(node.info.invariants)
+        for dep in node.info.deps:
+            if dep in s.nodes and s.nodes[dep].locked:
+                invariants.extend(s.nodes[dep].info.invariants)
+        frame = _okf.frame_markdown(
+            node.info, node.status, node.locked, node.verified,
+            focus=focus, fold_history=True, compact_meta=bool(focus), tree=compactor.tree,
+        )
+        rendered = _render_payload(frame, dep_skeletons, invariants)
+        tokens = _tokens.count(rendered)
+        auto = False
+        if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
+            # Unfocused frame would blow the budget: fall back to a pure AST
+            # skeleton with a symbol index so the agent can pick a focus.
+            frame = _okf.frame_markdown(
+                node.info, node.status, node.locked, node.verified,
+                focus=[], fold_history=True, symbol_index=True, tree=compactor.tree,
+            )
+            rendered = _render_payload(frame, dep_skeletons, invariants)
+            tokens = _tokens.count(rendered)
+            auto = True
+        elided: list[str] = []
+        if (focus is not None or auto) and tokens >= CHECKOUT_TOKEN_BUDGET:
+            # Still over budget: the ContextCompactor's ladder — unreferenced
+            # sibling method signatures, dependency stubs, frontmatter lists,
+            # then (unfocused only) docstrings / __init__ / parameters. The
+            # focused symbol and every top-level public name survive.
+            frame, dep_skeletons, elided = compactor.fit(
+                frame, dep_skeletons, invariants, CHECKOUT_TOKEN_BUDGET,
+                _tokens.count, _render_payload, focus=[] if auto else focus,
+            )
+            rendered = _render_payload(frame, dep_skeletons, invariants)
+            tokens = _tokens.count(rendered)
+        return frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided
+
+    def flush(self, session_id: str) -> None:
+        """Write the session's in-memory state — the telemetry of checkout-only
+        bursts included — to `<root>/.stepcheck/`. Mutating calls flush on their
+        own; a short-lived process that only checked out should call this
+        before it exits. A no-op on an ephemeral kernel."""
+        self._flush(self._session(session_id))
+
+    def locate(self, session_id: str, path: str | Path) -> dict | None:
+        """The tracked node a file path belongs to, without the sources the graph
+        view carries: `{node_id, path, status, locked, source_tokens}`, or None
+        when the path is outside the project or untracked. The cheap query the
+        lifecycle hooks make on every Read / Edit."""
+        s = self._session(session_id)
+        try:
+            rel = Path(path).resolve().relative_to(s.root)
+        except ValueError:
+            return None
+        wanted = str(rel).replace("\\", "/")
+        for nid, n in s.nodes.items():
+            if n.info.path.replace("\\", "/") == wanted:
+                return {"node_id": nid, "path": n.info.path, "status": n.status, "locked": n.locked,
+                        "source_tokens": _tokens.count(n.info.source)}
+        return None
+
+    def node_source(self, session_id: str, node_id: str) -> str:
+        """The canonical source of one node — what a commit folds patches into."""
+        return self._get(session_id, node_id)[1].info.source
+
+    def omission_report(self, session_id: str) -> dict:
+        """`{"dirty": [node ids in DIRTY_OMISSION_RISK], "can_finalize": bool}` —
+        what `check_omission_risks` and the Stop hook ask, without the graph."""
+        s = self._session(session_id)
+        dirty = sorted(nid for nid, n in s.nodes.items() if n.status == DIRTY)
+        return {"dirty": dirty, "can_finalize": not dirty}
 
     def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError) -> CommitVerdict:
         if not node.locked:
@@ -488,7 +580,7 @@ class StateKernel:
                 imported = _okf.resolve_imports(
                     dep_id, dep.info.path, dep.info.source, modules
                 ).get(node.info.node_id, set())
-                if not any(n.startswith("_") and before.get(n) != after.get(n) for n in imported):
+                if not any(n and n.startswith("_") and before.get(n) != after.get(n) for n in imported):
                     continue
             dep.status = DIRTY
             dirtied.append(dep_id)
@@ -510,6 +602,7 @@ class StateKernel:
                 "node_id": node.info.node_id,
                 "tokens": sent_tokens,  # the folded diff actually sent
                 "full_tokens": _tokens.count(staged_info.source),
+                "dirtied": list(dirtied),
                 "at": at,
             }
         )
@@ -573,6 +666,7 @@ class StateKernel:
         s.persisted_sha = digest
 
     def _flush(self, s: _Session) -> None:
+        s.payload_cache.clear()  # the canonical state is about to change
         if self._ephemeral:
             return
         s.frame_shas = _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes, s.frame_shas)

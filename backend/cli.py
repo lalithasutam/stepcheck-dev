@@ -135,10 +135,11 @@ def _ci_parse(root: Path) -> list[tuple[str, str]]:
             source = _okf.decode_source(p.read_bytes())
         except UnicodeDecodeError:
             continue  # the kernel leaves non-UTF-8 files untracked
-        if _okf.language(rel) == "typescript":
-            problem = _ts.syntax_problem(source)
+        _mod = _okf.lang_module(rel)
+        if _mod is not None:
+            problem = _mod.syntax_problem(source)
             if problem:
-                problems.append((rel, f"Gate A: invalid TypeScript syntax: {problem}"))
+                problems.append((rel, f"Gate A: invalid {_okf.language(rel)} syntax: {problem}"))
             continue
         try:
             ast.parse(source, filename=rel)
@@ -206,12 +207,26 @@ def cmd_ci(args: argparse.Namespace) -> int:
         print(f"stepcheck ci: {root} is not a directory", file=sys.stderr)
         return 2
     print(f"stepcheck ci — {root}")
+    if getattr(args, "report", False):
+        import licensing
+
+        denial = licensing.gate_env("ci_report")
+        if denial is not None:
+            print(f"stepcheck ci --report: {denial['message']}", file=sys.stderr)
+            return 3
 
     def fail(problems: list[tuple[str, str]], phase: str) -> int:
         for where, what in problems:
             print(f"  FAIL  {where}: {what}")
         where, what = problems[0]
         print(f"stepcheck ci: FAIL — {len(problems)} problem(s) in {phase}; first: {where} — {what}")
+        if getattr(args, "report", False):
+            text = _ci_report(root)
+            if text is not None:  # the PR still gets the checklist that names the dirty nodes
+                print()
+                print(text, end="")
+                if args.report_out:
+                    Path(args.report_out).write_text(text, encoding="utf-8", newline="\n")
         return 1
 
     problems = _ci_parse(root)
@@ -305,6 +320,12 @@ def main(argv: list[str] | None = None) -> int:
     hk.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
     hk.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
     hk.set_defaults(fn=cmd_hooks)
+
+    cp = sub.add_parser("compliance", help="export the dual-use compliance bundle: DUC.json (public card, hashes and "
+                                         "counts only) + DUA-E.json (escrowed in-toto envelopes and control mappings)")
+    cp.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
+    cp.add_argument("--out", default="stepcheck-compliance", help="output directory (default: ./stepcheck-compliance)")
+    cp.set_defaults(fn=cmd_compliance)
 
     args = parser.parse_args(argv)
     return args.fn(args)
@@ -642,6 +663,41 @@ def _audit_card_md(total: dict) -> str:
         f"**{_fmt_int(total['regressions'])}** edits dropped a decorator/guard a gate would have blocked "
         f"({_fmt_int(total['retry_turns'])} retry turns)\n"
     )
+
+
+def cmd_compliance(args: argparse.Namespace) -> int:
+    """`stepcheck compliance [path] --out <dir>`: DUC.json (public dual-use card:
+    repo digest, language counts, gate verdicts, invariant counts, DSSE Merkle
+    root, self-verified zero path/code leakage) and DUA-E.json (escrowed bundle:
+    every in-toto Statement v1 envelope, the Merkle tree, control mappings for
+    OWASP AISVS 1.0 C9.3, SOC 2 CC8.1, PCI DSS 4.0 6.3.2 and EU AI Act Art. 12).
+    Enterprise tier when licensing is enforced. Exit 1 without a session."""
+    import json
+
+    import licensing
+    from kernel import StateKernel
+
+    denial = licensing.gate_env("compliance_bundle")
+    if denial is not None:
+        print(f"stepcheck compliance: {denial['message']}", file=sys.stderr)
+        return 3
+    root = Path(args.path).resolve()
+    try:
+        bundle = StateKernel().compliance_bundle(root)
+    except KeyError as exc:
+        print(f"stepcheck compliance: {exc} (open a session with init_project_session first)", file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, doc in (("DUC.json", bundle["DUC"]), ("DUA-E.json", bundle["DUA-E"])):
+        data = json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+        (out / name).write_bytes(data.encode("utf-8"))
+        print(f"wrote {out / name} ({len(data.encode('utf-8')):,} bytes)")
+    duc = bundle["DUC"]
+    print(f"files {duc['files']} · languages {duc['languages']} · commits {duc['gates']['commits_accepted']} · "
+          f"rejections {duc['gates']['rejections']} · invariants {duc['invariants']['total']} · "
+          f"merkle root {duc['attestations']['merkle_root']} · leak check {duc['leak_check']['paths']}/{duc['leak_check']['code']}")
+    return 0
 
 
 if __name__ == "__main__":

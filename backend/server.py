@@ -349,12 +349,12 @@ async def ws_session(ws: WebSocket, session_id: str) -> None:
 
 
 def _msg_text(message: dict) -> str:
-    content = message.get("content", "")
-    if isinstance(content, str):
-        return content
-    return "\n".join(
-        block.get("text", "") for block in content if isinstance(block, dict)
-    )
+    """Text of a message in either API shape, tool_result blocks and `role: "tool"`
+    messages included (the accordion's reader), so raw / sent token counts and
+    step detection see what the model would see."""
+    from kernel import _accordion
+
+    return _accordion.message_text(message)
 
 
 def _extract_step(text: str) -> tuple[str, object] | None:
@@ -442,10 +442,12 @@ async def _run_firewall(
     )
     sent.extend(compaction.messages)
 
+    routing = _route(hdrs, body, node_id, focus, last_step, commit_info)
     raw_tokens = sum(_count(_msg_text(m)) for m in messages) + sum(
         _count(s) for s in systems if api == "anthropic"
     )
     sent_tokens = sum(_count(_msg_text(m)) for m in sent)
+    _record_door1(session_id, compaction.report(), routing, sent_tokens, body.get("model"))
     return {
         "session_id": session_id,
         "node_id": node_id,
@@ -454,7 +456,7 @@ async def _run_firewall(
         "tokens_pruned": raw_tokens - sent_tokens,
         "sent_messages": sent,
         "compaction": compaction.report(),
-        "routing": _route(hdrs, body, node_id, focus, last_step, commit_info),
+        "routing": routing,
         "commit": commit_info,
         "telemetry": _telemetry_json(session_id),
     }
@@ -655,6 +657,64 @@ def _route(headers: dict, body: dict, node_id: str | None, focus: list[str] | No
     if tier == "fast" and commit_info and not commit_info.get("accepted"):
         escalated, gate, tier, model = True, commit_info.get("gate"), "frontier", frontier
     return {"policy": policy, "tier": tier, "model": model, "escalated": escalated, "gate": gate, "focused_turn": focused}
+
+
+def _record_door1(session_id: str, report: dict, routing: dict, sent_tokens: int, frontier_model: str | None) -> None:
+    """Persist one Door 1 turn as a `door1` session event (band token counts,
+    cache-cliff fold, pruned/folded messages, routing decision with the frontier
+    and fast model names) so the team ledger can aggregate compaction, shield
+    and arbitrage figures across sessions."""
+    try:
+        KERNEL.record_event(session_id, {
+            "kind": "door1",
+            "tokens_before": int(report.get("tokens_before") or 0),
+            "tokens_after": int(report.get("tokens_after") or 0),
+            "pruned_messages": int(report.get("pruned_messages") or 0),
+            "folded_messages": int(report.get("folded_messages") or 0),
+            "cache_cliff": bool(report.get("cache_cliff")),
+            "sent_tokens": int(sent_tokens),
+            "routing": {**routing, "frontier_model": frontier_model,
+                        "fast_model": os.environ.get("STEPCHECK_FAST_MODEL", "claude-haiku-4-5")},
+        })
+    except KeyError:
+        pass
+
+
+_LICENSED_PATHS = {
+    "/v1/messages": "door1_accordion",
+    "/v1/chat/completions": "door1_accordion",
+    "/v1/team/summary": "team_summary",
+}
+
+
+@app.middleware("http")
+async def _license_gate(request: Request, call_next):
+    """Opt-in tier enforcement (STEPCHECK_REQUIRE_KEY=1): Door 1 needs `pro`,
+    the team ledger needs `team`, verified from `X-StepCheck-Key`; without
+    enforcement every path is open and nothing here runs. Policy: licensing."""
+    import licensing
+    from fastapi.responses import JSONResponse
+
+    capability = _LICENSED_PATHS.get(request.url.path)
+    if capability is not None:
+        denial = licensing.gate_headers(dict(request.headers), capability)
+        if denial is not None:
+            return JSONResponse(status_code=402, content=denial)
+    return await call_next(request)
+
+
+@app.get("/v1/team/summary")
+async def team_summary(request: Request, project_root: str | None = None) -> dict:
+    """Team FinOps & governance ledger across every registered session (or the
+    sessions of `project_root`): checkout telemetry, Door 1 compaction and
+    cache-cliff shield, model-arbitrage dollars, regressions caught per gate,
+    DIRTY_OMISSION_RISK flags raised and re-verified, and the tier in force."""
+    import ledger
+    import licensing
+
+    roots = [Path(project_root)] if project_root else None
+    tier = licensing.held_tier(request.headers.get(licensing.HEADER))
+    return ledger.summarize(KERNEL, roots, tier=tier, enforcement=licensing.enforcement_enabled())
 
 
 if __name__ == "__main__":

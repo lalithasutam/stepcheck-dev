@@ -112,8 +112,9 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     from . import _okf as _okf_, _ts
 
     _path = next((n.info.path for nid, n in nodes.items() if nid == node_id), f"{node_id}.py")
-    if _okf_.language(_path) == "typescript":
-        return _ts.gate_a(node_id, locked, source, nodes)
+    _mod = _okf_.lang_module(_path)
+    if _mod is not None:
+        return _mod.gate_a(node_id, locked, source, nodes)
     from . import MechanicalError, _okf  # local import: avoid cycle at module load
 
     if locked:
@@ -281,8 +282,24 @@ def gate_c(
     the full step + clock guard. A falsy result, or any exception, is a
     kernel.LogicalError.
     """
+    guard_invariants = [inv for inv in invariants if inv.startswith("guard:")]
+    if guard_invariants:
+        # Structural invariants (TypeScript / Go / Rust / Java): a mined leading guard
+        # must still exist in the symbol's body — anywhere in it, equivalent after
+        # whitespace normalisation — unless the commit declared the deletion.
+        from . import LogicalError as _LogicalError, _okf as _okf_
+
+        _path = (project_paths or {}).get(node_id, f"{node_id}.py")
+        present = _okf_.present_guards(staged_source, _path)
+        for inv in guard_invariants:
+            if inv not in present:
+                raise _LogicalError(
+                    f"staged diff violates frame invariant {inv!r} of '{node_id}' "
+                    f"(auto-mined leading guard clause removed or weakened)"
+                )
+        invariants = [inv for inv in invariants if not inv.startswith("guard:")]
     if not invariants:
-        return  # nothing to evaluate (TypeScript modules carry no invariants)
+        return  # nothing left to execute (foreign modules carry only guard invariants)
     from . import LogicalError, _sandbox
 
     tree = ast.parse(staged_source)

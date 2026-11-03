@@ -70,11 +70,9 @@ def _session(event: dict, path: Path | None) -> tuple[str, Path] | None:
 
 def _node_for(kernel: StateKernel, sid: str, root: Path, target: Path) -> dict | None:
     try:
-        graph = kernel.graph(sid)
+        return kernel.locate(sid, target)  # no sources, no graph: one path comparison
     except KeyError:
         return None
-    target = target.resolve()
-    return next((n for n in graph["nodes"] if (root / n["path"]).resolve() == target), None)
 
 
 def _deny(reason: str, context: str | None = None) -> dict:
@@ -100,7 +98,7 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
         return {}  # not a tracked module: the tool is fine
     if tool == "Read":
         threshold = int(event.get("threshold") or DEFAULT_READ_THRESHOLD)
-        raw_tokens = _tokens.count(node["source"])
+        raw_tokens = node["source_tokens"]
         if raw_tokens <= threshold:
             return {}
         payload = kernel.checkout(sid, node["node_id"], focus=[])
@@ -116,7 +114,7 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
             context,
         )
     if tool in EDIT_TOOLS and node["status"] == "LOCKED":
-        verdict = kernel.commit(sid, node["node_id"], source=node["source"])  # Gate A speaks for itself
+        verdict = kernel.commit(sid, node["node_id"], source=kernel.node_source(sid, node["node_id"]))  # Gate A speaks for itself
         reason = str(verdict.error) if verdict.error else f"node '{node['node_id']}' is LOCKED"
         return _deny(f"StepCheck Gate A: {reason}. Unlock it or edit through the gates.")
     return {}
@@ -130,10 +128,9 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
     dirty: dict[str, list[str]] = {}
     for sid, _root in candidates:
         try:
-            graph = kernel.graph(sid)
+            nodes = kernel.omission_report(sid)["dirty"]
         except KeyError:
             continue
-        nodes = sorted(n["node_id"] for n in graph["nodes"] if n["status"] == "DIRTY_OMISSION_RISK")
         if nodes:
             dirty[sid] = nodes
     if not dirty:

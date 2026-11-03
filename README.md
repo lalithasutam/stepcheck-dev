@@ -1,11 +1,37 @@
 # StepCheck Dev
 
 [![CI](https://github.com/lalithasutam/stepcheck-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/lalithasutam/stepcheck-dev/actions/workflows/ci.yml)
-**Live:** [126-session audit receipt](https://lalithasutam.github.io/stepcheck-dev/audit.html) · [50-turn interactive replay](https://lalithasutam.github.io/stepcheck-dev/)
+**Live:** [131-session audit receipt](https://lalithasutam.github.io/stepcheck-dev/audit.html) · [50-turn interactive replay](https://lalithasutam.github.io/stepcheck-dev/)
 
-Deterministic Anti-Context-Rot State Engine · BYOK Token-Firewall Proxy ·
-Streamable HTTP MCP Server · Split-Pane Visual Workspace.
-Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
+**Cloudflare + pre-commit for coding agents.** A deterministic layer between your agent and the model that
+stops two things that go wrong in every long session: the agent quietly drops a decorator or a guard clause
+around turn 25 because the file it is editing has been sitting in context as a stale 500-line read, and you
+pay for all of those reads again at full price every time you pause longer than the provider's cache window.
+Teams get the same problem multiplied: more AI pull requests than a senior engineer can review for cross-file
+omissions, on a frontier-model bill driven by trivial edits over uncompacted history.
+
+**Three steps, none of them in your prompt:**
+
+1. `stepcheck audit --card` — sixty seconds, no server: reads your local Claude Code transcripts and shows the
+   dollars lost to cache-cliff re-reads, the share of Read tokens spent on bodies the agent never used, and
+   the exact turns where a decorator or guard went missing. Nothing but totals leaves the machine.
+2. `stepcheck hooks && stepcheck up` — invisible daily protection: a `PreToolUse` hook turns large file reads
+   into AST skeletons, every edit runs Gates A/B/C (dropped decorator or guard: blocked; changed signature:
+   callers flagged `DIRTY_OMISSION_RISK`), and the `Stop` hook refuses to end the turn until those callers are
+   re-verified.
+3. Door 1 proxy + PR bot — for teams: accordion compaction of old tool results, a cache-cliff shield, gate-backed
+   routing of focused edits to a cheaper model, and `stepcheck ci --report` (or the GitHub Action) posting a
+   blast-radius and in-toto provenance checklist on every PR.
+
+| Tier | Who | What it unlocks |
+| --- | --- | --- |
+| Open core (free, Apache-2.0) | every developer | audit card, hooks, the gateway, Gates A/B/C, MCP, Studio |
+| Pro FinOps proxy ($19/mo or 15% of verified savings) | heavy API / BYOK users | all-turn accordion compaction, cache-cliff shield, `x-stepcheck-tier: auto` arbitrage |
+| Team PR & FinOps ($39/seat/mo) | 10–100 seat teams | GitHub Action PR bot, `GET /v1/team/summary` ledger, org-wide Pin & Lock |
+| Enterprise Trust Ledger ($79/seat/mo or self-hosted) | regulated engineering orgs | polyglot monorepo verification, `stepcheck compliance` DUC / DUA-E bundles |
+
+Licensing is opt-in (`STEPCHECK_REQUIRE_KEY=1`); with it unset everything in this repository runs locally with no
+key. Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 
 ## Layout
 
@@ -13,7 +39,7 @@ Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 166 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/tests/` | 229 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 87.9% tokens saved) + review generator |

@@ -261,7 +261,7 @@ def syntax_problem(source: str) -> str | None:
 @dataclass
 class Decl:
     name: str
-    kind: str  # function | class | interface | type | enum | const | let | var | namespace
+    kind: str  # function | class | interface | type | enum | const | let | var | namespace | method | field
     exported: bool
     is_default: bool
     start: int  # char offset of the first leading comment / decorator / modifier
@@ -269,10 +269,21 @@ class Decl:
     header: str  # signature text (no body), single-spaced
     decorators: list[str] = field(default_factory=list)
     body_open: int | None = None  # char offset of the body `{`, if any
+    members: list["Decl"] = field(default_factory=list)  # class members (methods, fields)
+    owner: str | None = None  # the class a member belongs to
+    indent: str = ""  # a member's own indentation
 
     @property
     def is_function(self) -> bool:
-        return self.kind == "function" or "=>" in self.header
+        return self.kind in ("function", "method") or "=>" in self.header
+
+    @property
+    def dotted(self) -> str:
+        return f"{self.owner}.{self.name}" if self.owner else self.name
+
+    @property
+    def attrs(self) -> list[str]:
+        return self.decorators
 
 
 @dataclass
@@ -408,7 +419,10 @@ def parse(src: str) -> tuple[list[Decl], list[Stmt]]:
                     header = header[: arrow + 2] + " ..."
                 elif eq > 0:
                     header = header[: eq + 1] + " ..."
-        decls.append(Decl(name, kind, exported, is_default, _leading_start(src, span_start), end, header, decorators, body_open))
+        decl = Decl(name, kind, exported, is_default, _leading_start(src, span_start), end, header, decorators, body_open)
+        if kind == "class" and body_open is not None:
+            decl.members = _class_members(src, sig, decl)
+        decls.append(decl)
         i = end_idx + 1
     return decls, stmts
 
@@ -426,9 +440,18 @@ def _public_header(d: Decl) -> str:
 
 def skeleton(src: str, focus: list[str]) -> str:
     """Imports and export statements verbatim, focused declarations verbatim,
-    every other declaration as its signature with the body elided (`{ ... }`)."""
+    every other declaration as its signature with the body elided (`{ ... }`).
+    A dotted focus `Class.method` keeps the class as a brace-elided skeleton
+    with its member signatures and emits only that member verbatim."""
+    from . import _cstyle as C
+
     decls, stmts = parse(src)
-    keep = set(focus)
+    keep = {f for f in focus if "." not in f}
+    members: dict[str, set[str]] = {}
+    for f in focus:
+        if "." in f:
+            owner, _, member = f.rpartition(".")
+            members.setdefault(owner, set()).add(member)
     items: list[tuple[int, str]] = []
     for s in stmts:
         if s.kind in ("import", "export"):
@@ -438,6 +461,8 @@ def skeleton(src: str, focus: list[str]) -> str:
     for d in decls:
         if d.name in keep:
             items.append((d.start, src[d.start: d.end].rstrip() + "\n"))
+        elif d.members and d.name in members:
+            items.append((d.start, C.render_container(src, d, members[d.name], _member_line)))
         else:
             items.append((d.start, "".join(f"{dec}\n" for dec in d.decorators) + _header_line(d) + "\n"))
     items.sort(key=lambda it: it[0])
@@ -502,29 +527,12 @@ def _span_lines(src: str, d: Decl) -> tuple[int, int]:
 
 
 def apply_patch(src: str, patch: list[dict]) -> str:
-    """`append` / `replace_symbol` / `delete_symbol` by declaration name, splicing
+    """`append` / `replace_symbol` / `delete_symbol` by declaration name — dotted
+    `Class.method` addresses a member (unindented code is re-indented) — splicing
     exact line spans so everything else survives byte-for-byte."""
-    for op in patch:
-        kind = op.get("op")
-        if kind == "append":
-            code = op["code"].rstrip("\n") + "\n"
-            src = (src.rstrip("\n") + "\n\n" + code) if src.strip() else code
-            continue
-        if kind not in ("replace_symbol", "delete_symbol"):
-            raise ValueError(f"unknown patch op {kind!r}")
-        decls, _ = parse(src)
-        target = next((d for d in decls if d.name == op["name"]), None)
-        if target is None:
-            raise ValueError(f"patch targets unknown top-level symbol {op['name']!r}")
-        lines = src.splitlines(keepends=True)
-        start, end = _span_lines(src, target)
-        head, tail = "".join(lines[: start - 1]), "".join(lines[end:])
-        if kind == "replace_symbol":
-            src = head + op["code"].rstrip("\n") + "\n" + tail
-        else:
-            head, tail = head.rstrip("\n"), tail.lstrip("\n")
-            src = (head + "\n\n" + tail) if head and tail else (head + "\n" if head else tail)
-    return src
+    from . import _cstyle as C
+
+    return C.apply_patch(src, patch, parse)
 
 
 # ------------------------------------------------------------------ imports
@@ -602,8 +610,9 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
 
 def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str]):
     """OKF facts for a TypeScript/JavaScript module: exported signatures, relative
-    import edges, preserved symbols (every declaration, decorators per module and
-    per symbol); no invariants."""
+    import edges, preserved symbols (every declaration, decorators per module,
+    per symbol and per `Class.member`), and the structural `guard:` invariants
+    mined from leading `if (cond) throw …` clauses."""
     from . import _okf
 
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
@@ -619,10 +628,17 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
             for sym in (f"@{name}", f"@{name} on {d.name}"):
                 if sym not in preserved:
                     preserved.append(sym)
+        for m in d.members:
+            for dec in m.decorators:
+                name = dec.lstrip("@").split("(")[0]
+                sym = f"@{name} on {d.name}.{m.name}"
+                if sym not in preserved:
+                    preserved.append(sym)
     deps = sorted(resolve_imports(node_id, path, source, modules))
+    guards = mine_guards(source)
     return _okf.ModuleInfo(
         node_id=node_id, path=path, source=source, exports=exports, deps=deps,
-        preserved_symbols=preserved, invariants=[], mined_invariants=[],
+        preserved_symbols=preserved, invariants=list(guards), mined_invariants=list(guards),
     )
 
 
@@ -652,3 +668,106 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> None:
                 f"export '{missing[0]}' of '{node_id}' is required by dependent "
                 f"'{dep_id}' and is missing from the staged source"
             )
+
+
+_MEMBER_MODIFIERS = frozenset({"public", "private", "protected", "static", "readonly", "abstract", "async", "override",
+                               "declare", "accessor", "get", "set"})
+
+
+def _class_members(src: str, sig: list[Tok], decl: Decl) -> list[Decl]:
+    """Methods and fields of a class body (depth-1 statements): decorators,
+    modifiers, `#private`, `constructor`, getters/setters, generic methods."""
+    from . import _cstyle as C
+
+    index = {t.start: i for i, t in enumerate(sig)}
+    oi = index.get(decl.body_open)
+    if oi is None:
+        return []
+    ci = C.matching_close(sig, oi)
+    if ci is None:
+        return []
+    out: list[Decl] = []
+    q = oi + 1
+    while q < ci:
+        t = sig[q]
+        if t.depth != 1 or (t.kind == "punct" and t.text in (";", ",")):
+            q += 1
+            continue
+        decorators: list[str] = []
+        j = q
+        while j < ci and sig[j].kind == "punct" and sig[j].text == "@" and sig[j].depth == 1:
+            k = j + 1
+            if k < ci and sig[k].kind == "id":
+                k += 1
+                while k + 1 < ci and sig[k].text == "." and sig[k + 1].kind == "id":  # dotted decorator name only
+                    k += 2
+            if k < ci and sig[k].text == "(" and sig[k].depth == 1:
+                k += 1
+                while k < ci and not (sig[k].depth == 2 and sig[k].text == ")"):
+                    k += 1
+                k += 1
+            decorators.append(_squash(src[sig[j].start: sig[k - 1].end]))
+            j = k
+        e = C.statement_end(sig, j, 1)
+        k = j
+        exported = True
+        while k <= e and sig[k].kind == "id" and sig[k].text in _MEMBER_MODIFIERS and not (k + 1 <= e and sig[k + 1].text in ("(", "<", ":", "=", ";")):
+            if sig[k].text in ("private", "protected"):
+                exported = False
+            k += 1
+        name = None
+        if k <= e:
+            tk = sig[k]
+            if tk.kind == "id":
+                name = tk.text
+            elif tk.kind == "punct" and tk.text == "#" and k + 1 <= e and sig[k + 1].kind == "id":
+                name, exported = "#" + sig[k + 1].text, False
+                k += 1
+            elif tk.kind == "string":
+                name = tk.text[1:-1]
+        if not name:
+            q = e + 1
+            continue
+        nxt = sig[k + 1] if k + 1 <= e else None
+        is_method = nxt is not None and nxt.kind == "punct" and nxt.text in ("(", "<")
+        open_idx, _close_idx = C.body_bounds(sig, j, e)
+        body_open = sig[open_idx].start if open_idx is not None else None
+        header = _squash(src[sig[j].start: body_open]) if body_open is not None else _squash(src[sig[j].start: sig[e].end])
+        if body_open is None and len(header) > 80:
+            eq = header.find("=")
+            if eq > 0:
+                header = header[: eq + 1] + " ..."
+        out.append(Decl(name, "method" if is_method else "field", exported, False, _leading_start(src, sig[q].start), sig[e].end,
+                        header, decorators, body_open, [], decl.name, C.indent_of(src, sig[q].start)))
+        q = e + 1
+    return out
+
+
+def _member_line(m: Decl) -> str:
+    return "".join(f"{m.indent}{dec}\n" for dec in m.decorators) + f"{m.indent}{_header_line(m)}\n"
+
+
+def _guard_rule():
+    from . import _cstyle as C
+
+    return C.GuardRule(paren_condition=True, effects=(("throw", ""),))
+
+
+def mine_guards(src: str) -> list[str]:
+    """`guard:<symbol>:<cond> throws <Error>` for every leading `if (cond) { throw … }`
+    / `if (cond) throw …;` of a top-level function, arrow const or class method.
+    `if (!x) return …` is not a guard."""
+    from . import _cstyle as C
+
+    decls, _ = parse(src)
+    sig = [t for t in tokenize(src) if t.kind != "comment"]
+    return C.mine_guards(sig, decls, _guard_rule(), leading_only=True)
+
+
+def present_guards(src: str) -> set[str]:
+    """The guards structurally present anywhere in each symbol's body."""
+    from . import _cstyle as C
+
+    decls, _ = parse(src)
+    sig = [t for t in tokenize(src) if t.kind != "comment"]
+    return set(C.mine_guards(sig, decls, _guard_rule(), leading_only=False))

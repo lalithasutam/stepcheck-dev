@@ -59,10 +59,9 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     symbol (`@name on symbol`), so dropping `@fixture` from one function is an
     omission even while a sibling still carries it. Method decorators are
     fingerprinted per dotted symbol (`@width.setter on Box.width`)."""
-    if language(path) == "typescript":
-        from . import _ts
-
-        return _ts.analyze(node_id, path, source, project_modules)
+    _mod = lang_module(path)
+    if _mod is not None:
+        return _mod.analyze(node_id, path, source, project_modules)
     tree = ast.parse(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
@@ -124,10 +123,9 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
 
 
 def statement_count(source: str) -> int:
-    from . import _ts
-
-    if _ts.looks_like_typescript(source):
-        return _ts.statement_count(source)
+    _mod = foreign_module(source)
+    if _mod is not None:
+        return _mod.statement_count(source)
     return sum(1 for n in ast.walk(ast.parse(source)) if isinstance(n, ast.stmt))
 
 
@@ -140,11 +138,16 @@ def frame_markdown(
     focus: list[str] | None = None,
     fold_history: bool = False,
     symbol_index: bool = False,
+    compact_meta: bool = False,
+    tree: ast.Module | None = None,
 ) -> str:
     """The OKF frame. On disk: full source + append-only verified[] chain.
     In a CheckoutPayload (`fold_history=True`): superseded attestations fold
-    into one summary, and `focus` slices the body to an AST skeleton."""
-    fence = "ts" if language(info.path) == "typescript" else "python"
+    into one summary, and `focus` slices the body to an AST skeleton.
+    `compact_meta` scopes the frontmatter lists to the focus (counts stand in
+    for the exports, preserved symbols and invariants it does not touch — all
+    still enforced at the gates); `tree` is the module already parsed."""
+    fence = _FENCES.get(language(info.path), "python")
     meta: dict = {
         "node_id": info.node_id,
         "path": info.path,
@@ -165,11 +168,19 @@ def frame_markdown(
         }
     else:
         meta["verified"] = verified
+    scoped = ""
+    if compact_meta and fold_history:
+        referenced: set[str] = set()
+        if tree is not None and focus:
+            for f in focus:
+                referenced |= _names_in(_resolve_symbol(tree, f)[1])
+        meta = _compact_meta(meta, focus or [], referenced)
+        scoped = " Frontmatter scoped to the focus (counts stand in for the rest; all still enforced)."
     fm = yaml.safe_dump(meta, sort_keys=False, default_flow_style=False)
     if focus is None:
         body_src, note = info.source, ""
     elif symbol_index:
-        body_src = skeleton(info.source, [])
+        body_src = skeleton(info.source, [], tree=tree)
         names = [n for n in symbol_names(info.source)]
         note = (
             f" Source is {len(info.source.splitlines())} lines — over the checkout budget, so this"
@@ -177,7 +188,7 @@ def frame_markdown(
             f"\n\nSymbol index ({len(names)}): " + ", ".join(names)
         )
     else:
-        body_src = skeleton(info.source, focus)
+        body_src = skeleton(info.source, focus, tree=tree)
         note = (
             f" Sliced to focus {focus!r}; other symbols are skeletons —"
             " commit a `patch` (append / replace_symbol / delete_symbol) to fold edits in."
@@ -187,7 +198,7 @@ def frame_markdown(
     body = (
         f"# {info.node_id}\n\n"
         f"Compacted OKF frame for `{info.path}` — "
-        f"{len(info.exports)} exports, {len(info.deps)} deps.{note}\n\n"
+        f"{len(info.exports)} exports, {len(info.deps)} deps.{note}{scoped}\n\n"
         f"```{fence}\n{body_src}```\n"
     )
     return f"---\n{fm}---\n\n{body}"
@@ -352,21 +363,29 @@ def _assign_names(node: ast.stmt) -> list[str]:
     return [ast.unparse(t) for t in targets]
 
 
-def skeleton(source: str, focus: list[str], *, elide_methods: bool = False) -> str:
+def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, compact: int = 0,
+             tree: ast.Module | None = None) -> str:
     """Slice a module in two tiers. `focus=[]`: every def/class as decorators +
     signature + first docstring line + `...` (every top-level name kept); runs of
     module-level assignments folded into one summary line; imports verbatim.
     A non-empty `focus`: the focused defs/classes verbatim; a dotted
     `Class.method` keeps its class as a skeleton (sibling method signatures with
     docstrings stripped, `__init__` included) and emits only that method verbatim;
-    sibling classes the focus does not reference collapse to one-line stubs.
+    sibling classes the focus does not reference collapse to counted one-line
+    stubs (a run of four or more folds into one line naming them), the module
+    docstring to its summary line, and imports the focus cannot reach to a count.
     `elide_methods` (the budget backstop) keeps only `__init__`, the focused
-    methods and the methods the focus references, counting the rest."""
-    from . import _ts
-
-    if _ts.looks_like_typescript(source):
-        return _ts.skeleton(source, focus)
-    tree = ast.parse(source)
+    methods and the methods the focus references, counting the rest.
+    `compact` is the unfocused budget ladder: 1 drops docstring lines, `__init__`
+    signatures (classes become counted stubs) and the parameters of private
+    top-level functions; 2 also elides public function parameters and folds the
+    import block — every top-level public name survives both rungs.
+    `tree` is the already-parsed module (a checkout parses once)."""
+    if tree is None:
+        _mod = foreign_module(source)
+        if _mod is not None:
+            return _mod.skeleton(source, focus)
+        tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     keep = {f for f in focus if "." not in f}
     members: dict[str, set[str]] = {}
@@ -384,35 +403,97 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False) -> s
                 owner = next((s for s in tree.body if isinstance(s, ast.ClassDef) and s.name == f.split(".")[0]), None)
                 if owner is not None:
                     referenced |= _names_in(owner.bases) | _names_in(owner.decorator_list)
+        referenced |= keep | set(members)
     out: list[str] = []
     pending_assigns: list[str] = []
+    pending_stubs: list[tuple[str, str]] = []
+    pending_misc: list[str] = []
+    pending_imports: list[str] = []
+    imports_elided = 0
+    last = ""
 
-    def flush_assigns() -> None:
-        if not pending_assigns:
-            return
-        if len(pending_assigns) <= 2:
-            out.extend(f"{a} = ...\n" for a in pending_assigns)
-        else:
-            out.append(
-                f"# folded {len(pending_assigns)} module-level assignments: "
-                f"{pending_assigns[0]} … {pending_assigns[-1]} "
-                f"(checkout without focus for full source)\n"
-            )
-        pending_assigns.clear()
+    def flush() -> None:
+        nonlocal imports_elided
+        if pending_imports or imports_elided:
+            out.extend(pending_imports)
+            if imports_elided:
+                out.append(f"# + {imports_elided} imports elided (unreferenced by the focus)\n")
+            pending_imports.clear()
+            imports_elided = 0
+        if pending_assigns:
+            if len(pending_assigns) <= 2:
+                out.extend(f"{a} = ...\n" for a in pending_assigns)
+            else:
+                out.append(
+                    f"# folded {len(pending_assigns)} module-level assignments: "
+                    f"{pending_assigns[0]} … {pending_assigns[-1]} "
+                    f"(checkout without focus for full source)\n"
+                )
+            pending_assigns.clear()
+        if pending_stubs:
+            if len(pending_stubs) < 4:
+                out.extend("\n\n" + text for _name, text in pending_stubs)
+            else:
+                out.append(f"\n\n# + {len(pending_stubs)} unreferenced sibling classes elided: "
+                           + ", ".join(name for name, _text in pending_stubs) + "\n")
+            pending_stubs.clear()
+        if pending_misc:
+            if len(pending_misc) <= 2:
+                out.extend(pending_misc)
+            else:
+                out.append(f"# + {len(pending_misc)} module-level statements folded: {pending_misc[0][2:].strip()} … "
+                           "(checkout without focus for full source)\n")
+            pending_misc.clear()
+
+    def category(stmt: ast.stmt) -> str:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            return "assign"
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            return "import"
+        if isinstance(stmt, ast.ClassDef) and focused and stmt.name not in keep and stmt.name not in members and stmt.name not in referenced:
+            return "stub"
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return "def"
+        if isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
+            return "doc"
+        return "misc"
 
     for stmt in tree.body:
-        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+        kind = category(stmt)
+        if kind != last:
+            flush()
+        last = kind
+        if kind == "assign":
             pending_assigns.extend(_assign_names(stmt))
-            continue
-        flush_assigns()
-        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            out.append(ast.unparse(stmt) + "\n")
+        elif kind == "import":
+            if focused or compact >= 2:
+                bound = {(a.asname or a.name.split(".")[0]) for a in stmt.names}
+                if focused and ("*" in bound or bound & referenced):
+                    pending_imports.append(ast.unparse(stmt) + "\n")
+                else:
+                    imports_elided += 1
+            else:
+                pending_imports.append(ast.unparse(stmt) + "\n")
+        elif kind == "stub":
+            pending_stubs.append((stmt.name, _class_stub(stmt)))
+        elif kind == "doc":
+            text = stmt.value.value if isinstance(stmt.value.value, str) else None
+            if text is not None and (focused or compact >= 1):
+                out.append(f'"""{_doc_line(text)}"""\n')
+            else:
+                out.append(ast.unparse(stmt) + "\n")
+        elif kind == "misc":
+            pending_misc.append("# " + ast.unparse(stmt).splitlines()[0][:60] + " …\n")
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if stmt.name in keep:
                 out.append("\n\n" + _segment(lines, stmt))
-            else:  # editing view (focused): signatures only; orientation view: summary lines too
-                out.append("\n\n" + _skeleton_def(stmt, doc=None if focused else "first"))
-        elif isinstance(stmt, ast.ClassDef):
+            elif focused:  # editing view: signatures only
+                out.append("\n\n" + _skeleton_def(stmt, doc=None))
+            elif compact >= 2 or (compact == 1 and stmt.name.startswith("_")):
+                out.append("\n\n" + _def_stub(stmt))
+            else:  # orientation view: summary lines too
+                out.append("\n\n" + _skeleton_def(stmt, doc=None if compact else "first"))
+        else:  # a class the view keeps as a skeleton
             if stmt.name in keep:
                 out.append("\n\n" + _segment(lines, stmt))
             elif stmt.name in members:
@@ -420,27 +501,22 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False) -> s
                 out.append("\n\n" + _skeleton_class(
                     stmt, frozenset(members[stmt.name]), lines, method_doc=None, keep_methods=kept
                 ))
-            elif focused and stmt.name not in referenced:
-                out.append("\n\n" + _class_stub(stmt))
             elif focused:
                 kept = ({"__init__"} | referenced) if elide_methods else None
                 out.append("\n\n" + _skeleton_class(stmt, doc=None, method_doc=None, keep_methods=kept))
+            elif compact >= 1:
+                out.append("\n\n" + _class_stub(stmt))
             else:
                 out.append("\n\n" + _skeleton_class(stmt, keep_methods={"__init__"} if elide_methods else None))
-        elif isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
-            out.append(ast.unparse(stmt) + "\n")  # module docstring
-        else:
-            out.append("# " + ast.unparse(stmt).splitlines()[0][:60] + " …\n")
-    flush_assigns()
+    flush()
     return "".join(out).lstrip("\n")
 
 
 def interface_skeleton(source: str) -> str:
     """Dependency view: signatures, decorators, docstrings — no bodies, no data."""
-    from . import _ts
-
-    if _ts.looks_like_typescript(source):
-        return _ts.interface_skeleton(source)
+    _mod = foreign_module(source)
+    if _mod is not None:
+        return _mod.interface_skeleton(source)
     tree = ast.parse(source)
     parts: list[str] = []
     for stmt in tree.body:
@@ -479,10 +555,9 @@ def apply_patch(source: str, patch: list[dict]) -> str:
     whole definition group — `@overload` stubs plus the implementation, a
     property getter with its setter — never just the first def.
     Raises ValueError on a bad op."""
-    from . import _ts
-
-    if _ts.looks_like_typescript(source):
-        return _ts.apply_patch(source, patch)
+    _mod = foreign_module(source)
+    if _mod is not None:
+        return _mod.apply_patch(source, patch)
     for op in patch:
         kind = op.get("op")
         if kind == "append":
@@ -526,10 +601,9 @@ def apply_patch(source: str, patch: list[dict]) -> str:
 
 def symbol_names(source: str) -> list[str]:
     """Top-level def/class names in file order (the auto-skeleton symbol index)."""
-    from . import _ts
-
-    if _ts.looks_like_typescript(source):
-        return _ts.symbol_names(source)
+    _mod = foreign_module(source)
+    if _mod is not None:
+        return _mod.symbol_names(source)
     return [
         s.name
         for s in ast.parse(source).body
@@ -763,10 +837,9 @@ def _import_records(
 def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str]) -> dict[str, set[str]]:
     """Dependency node_id -> names this module imports from it (empty when it
     imports the module object itself). Unparseable source resolves to nothing."""
-    if language(path) == "typescript":
-        from . import _ts
-
-        return _ts.resolve_imports(node_id, path, source, modules)
+    _mod = lang_module(path)
+    if _mod is not None:
+        return _mod.resolve_imports(node_id, path, source, modules)
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -855,10 +928,14 @@ def _names_in(nodes) -> set[str]:
 
 
 def _class_stub(node: ast.ClassDef) -> str:
-    """One-line stub for a sibling class the focus does not reference."""
+    """One-line stub for a sibling class the focus does not reference; a second
+    line counts the method signatures the stub hides."""
     bases = ", ".join(ast.unparse(b) for b in node.bases)
+    methods = sum(1 for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)))
     out = [f"@{ast.unparse(d)}\n" for d in node.decorator_list]
     out.append(f"class {node.name}({bases}): ...\n" if bases else f"class {node.name}: ...\n")
+    if methods:
+        out.append(f"    # + {methods} method signatures elided\n")
     return "".join(out)
 
 
@@ -867,31 +944,130 @@ _EXCLUDED_DIRS = frozenset({"node_modules", "dist", "build", "out", "coverage", 
 
 
 def language(path: str) -> str:
-    """`python` for `.py`, `typescript` for the TypeScript/JavaScript suffixes the
-    kernel tracks (`.d.ts` declaration files are never tracked)."""
+    """`python` for `.py`; `typescript`, `go`, `rust` or `java` for the other suffixes
+    the kernel tracks (`.d.ts` declaration files are never tracked); `other` otherwise."""
     p = path.replace("\\", "/").lower()
     if p.endswith(".py"):
         return "python"
-    if p.endswith(_TRACKED_SUFFIXES[1:]) and not p.endswith(".d.ts"):
-        return "typescript"
+    if p.endswith(".d.ts"):
+        return "other"
+    for lang, suffixes in _LANGUAGE_SUFFIXES.items():
+        if p.endswith(suffixes):
+            return lang
     return "other"
 
 
 def strip_suffix(path: str) -> str:
     """Path without its tracked source suffix (`pkg/models.py` -> `pkg/models`,
-    `src/App.tsx` -> `src/App`)."""
-    for suffix in _TRACKED_SUFFIXES:
+    `src/App.tsx` -> `src/App`, `pkg/util.go` -> `pkg/util`)."""
+    for suffix in _ALL_SUFFIXES:
         if path.endswith(suffix):
             return path[: -len(suffix)]
     return path
 
 
 def tracked_files(root: Path) -> list[Path]:
-    """Every source file the kernel indexes under `root`: Python plus
-    TypeScript/JavaScript, skipping `.d.ts`, hidden entries, `.stepcheck/` and
-    build/dependency directories (`node_modules`, `dist`, `build`, `out`)."""
+    """Every source file the kernel indexes under `root`: Python, TypeScript /
+    JavaScript, Go, Rust and Java, skipping `.d.ts`, hidden entries, `.stepcheck/`
+    and build/dependency directories (`node_modules`, `dist`, `build`, `out`,
+    `vendor`, `target`, `testdata`; `.gradle` is hidden)."""
     return sorted(
         p for p in root.rglob("*")
         if p.is_file() and language(str(p)) != "other"
-        and not any(part in _EXCLUDED_DIRS or part.startswith(".") for part in p.relative_to(root).parts)
+        and not any(part in _EXCLUDED_DIRS_ALL or part.startswith(".") for part in p.relative_to(root).parts)
     )
+
+
+def _def_stub(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> str:
+    """Name-only stub of a function: decorators + `def name(…): ...` — the last
+    rung of the unfocused budget ladder, where the symbol must survive but its
+    parameters may not (re-checkout with focus=[name] shows them)."""
+    out = [f"{indent}@{ast.unparse(d)}\n" for d in node.decorator_list]
+    kw = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+    out.append(f"{indent}{kw} {node.name}(…): ...\n")
+    return "".join(out)
+
+
+def _compact_meta(meta: dict, focus: list[str], referenced: set[str] | None = None) -> dict:
+    """Scope the frontmatter lists of a checkout payload to a focus: exports,
+    preserved symbols and invariants that name a focused symbol (or, for the
+    preserved symbols, a name the focused code references) stay; the rest
+    becomes a `<key>_elided` count. An unfocused call (the budget ladder) keeps
+    every invariant — the Gate C contract — and counts the two symbol lists."""
+    names: set[str] = set()
+    for f in focus:
+        names.add(f)
+        names.update(f.split("."))
+    extra = names | set(referenced or ())
+    patterns = {n: re.compile(rf"(?<![\w.]){re.escape(n)}(?![\w])") for n in extra}
+
+    def touches(entry: str, pool: set[str]) -> bool:
+        return any(patterns[n].search(entry) for n in pool)
+
+    out = dict(meta)
+    for key, pool in (("exports", names), ("preserved_symbols", extra), ("invariants", names), ("invariants_auto_mined", names)):
+        items = list(meta.get(key) or [])
+        if key.startswith("invariants") and not focus:
+            continue
+        kept = [e for e in items if touches(str(e), pool)]
+        out[key] = kept
+        if len(kept) != len(items):
+            out[f"{key}_elided"] = len(items) - len(kept)
+    return out
+
+
+def _compact_frontmatter(front: str, focus: list[str]) -> str:
+    """`_compact_meta` applied to the YAML text of a payload frame (the budget
+    backstop works on the rendered frame)."""
+    meta = yaml.safe_load(front)
+    if not isinstance(meta, dict):
+        return front
+    return yaml.safe_dump(_compact_meta(meta, focus), sort_keys=False, default_flow_style=False)
+
+
+_LANGUAGE_SUFFIXES = {
+    "typescript": (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"),
+    "go": (".go",),
+    "rust": (".rs",),
+    "java": (".java",),
+}
+_ALL_SUFFIXES = (".py",) + tuple(s for suffixes in _LANGUAGE_SUFFIXES.values() for s in suffixes)
+_LANGUAGE_MODULES = {"typescript": "_ts", "go": "_go", "rust": "_rs", "java": "_java"}
+_FENCES = {"typescript": "ts", "go": "go", "rust": "rust", "java": "java"}
+_EXCLUDED_DIRS_ALL = _EXCLUDED_DIRS | frozenset({"vendor", "target", "testdata"})
+
+
+def lang_module(path: str):
+    """The language module (`_ts`, `_go`, `_rs`, `_java`) for a tracked path, or None for Python."""
+    import importlib
+
+    name = _LANGUAGE_MODULES.get(language(path))
+    return importlib.import_module("." + name, __package__) if name else None
+
+
+def foreign_module(source: str):
+    """For the source-only entry points: None when Python parses the text, else the
+    language module whose fingerprint matches (Go `package x` line, Java
+    `package …;` / `import …;` / `public class`, Rust `fn name(` / `impl`, else
+    TypeScript / JavaScript). A Python module that fails to parse never reaches
+    these (Gate A rejects it first)."""
+    if not source.strip():
+        return None
+    try:
+        ast.parse(source)
+        return None
+    except (SyntaxError, ValueError):
+        pass
+    from . import _go, _java, _rs, _ts
+
+    for mod in (_go, _java, _rs):
+        if mod.looks_like(source):
+            return mod
+    return _ts
+
+
+def present_guards(source: str, path: str | None = None) -> set[str]:
+    """Every `guard:<symbol>:<cond> <effect>` structurally present in `source`
+    (at any depth of the symbol's body), for Gate C's conservation check."""
+    mod = (lang_module(path) if path else None) or foreign_module(source)
+    return set(mod.present_guards(source)) if mod is not None and hasattr(mod, "present_guards") else set()
