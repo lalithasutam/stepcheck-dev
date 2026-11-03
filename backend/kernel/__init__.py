@@ -102,6 +102,7 @@ class CheckoutPayload:
     dependency_skeletons: dict[str, str] = field(default_factory=dict)
     focus: list[str] | None = None
     auto_skeletonized: bool = False
+    elided: list[str] = field(default_factory=list)  # budget backstop: what the payload dropped
 
     def rendered(self) -> str:
         return _render_payload(
@@ -172,11 +173,7 @@ class StateKernel:
 
     def init_session(self, project_root: str | Path) -> str:
         root = Path(project_root).resolve()
-        files = sorted(
-            p
-            for p in root.rglob("*.py")
-            if ".stepcheck" not in p.parts and not p.name.startswith(".")
-        )
+        files = _okf.tracked_files(root)
         loaded: dict[Path, tuple[str, bytes]] = {}
         for p in files:
             raw = p.read_bytes()
@@ -194,7 +191,7 @@ class StateKernel:
         ids = {
             p: p.stem
             if stems[p.stem] == 1
-            else rel[p].replace("\\", "/").removesuffix(".py").replace("/", ".")
+            else _okf.strip_suffix(rel[p].replace("\\", "/")).replace("/", ".")
             for p in loaded
         }
         modules = _okf.module_map({ids[p]: rel[p] for p in loaded})
@@ -225,11 +222,15 @@ class StateKernel:
             for dep in node.info.deps
             if dep in s.nodes
         }
-        dep_skeletons = {
-            dep: _okf.interface_skeleton(s.nodes[dep].info.source)
-            for dep in node.info.deps
-            if dep in s.nodes
-        }
+        from . import _compactor  # lazy: keeps the package import graph acyclic
+
+        compactor = _compactor.ContextCompactor(
+            node.info,
+            {dep: s.nodes[dep].info for dep in node.info.deps if dep in s.nodes},
+            self._modules(s),
+            focus,
+        )
+        dep_skeletons = compactor.dependency_skeletons()  # import-scoped, docstring-free
         invariants = list(node.info.invariants)
         for dep in node.info.deps:
             if dep in s.nodes and s.nodes[dep].locked:
@@ -251,6 +252,17 @@ class StateKernel:
             rendered = _render_payload(frame, dep_skeletons, invariants)
             tokens = _tokens.count(rendered)
             auto = True
+        elided: list[str] = []
+        if (focus is not None or auto) and tokens >= CHECKOUT_TOKEN_BUDGET:
+            # Still over budget: drop unreferenced sibling method signatures, then
+            # the interface stubs of dependencies the focus does not touch. The
+            # focused symbol and every top-level public name survive.
+            frame, dep_skeletons, elided = compactor.fit(
+                frame, dep_skeletons, invariants, CHECKOUT_TOKEN_BUDGET,
+                _tokens.count, _render_payload, focus=[] if auto else focus,
+            )
+            rendered = _render_payload(frame, dep_skeletons, invariants)
+            tokens = _tokens.count(rendered)
         s.events.append(
             {
                 "kind": "checkout",
@@ -271,6 +283,7 @@ class StateKernel:
             dependency_skeletons=dep_skeletons,
             focus=focus,
             auto_skeletonized=auto,
+            elided=elided,
         )
 
     def commit(

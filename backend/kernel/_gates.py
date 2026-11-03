@@ -109,6 +109,11 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     module-level `__getattr__` can serve any name, so the missing-export check
     does not apply to it.
     """
+    from . import _okf as _okf_, _ts
+
+    _path = next((n.info.path for nid, n in nodes.items() if nid == node_id), f"{node_id}.py")
+    if _okf_.language(_path) == "typescript":
+        return _ts.gate_a(node_id, locked, source, nodes)
     from . import MechanicalError, _okf  # local import: avoid cycle at module load
 
     if locked:
@@ -276,6 +281,8 @@ def gate_c(
     the full step + clock guard. A falsy result, or any exception, is a
     kernel.LogicalError.
     """
+    if not invariants:
+        return  # nothing to evaluate (TypeScript modules carry no invariants)
     from . import LogicalError, _sandbox
 
     tree = ast.parse(staged_source)

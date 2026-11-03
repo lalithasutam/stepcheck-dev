@@ -1,7 +1,7 @@
 # StepCheck Dev
 
 [![CI](https://github.com/lalithasutam/stepcheck-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/lalithasutam/stepcheck-dev/actions/workflows/ci.yml)
-**Live:** [116-session audit receipt](https://lalithasutam.github.io/stepcheck-dev/audit.html) · [50-turn interactive replay](https://lalithasutam.github.io/stepcheck-dev/)
+**Live:** [126-session audit receipt](https://lalithasutam.github.io/stepcheck-dev/audit.html) · [50-turn interactive replay](https://lalithasutam.github.io/stepcheck-dev/)
 
 Deterministic Anti-Context-Rot State Engine · BYOK Token-Firewall Proxy ·
 Streamable HTTP MCP Server · Split-Pane Visual Workspace.
@@ -12,14 +12,14 @@ Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | Path | What it is |
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
-| `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run), Door 2 REST `/v1/step/*` + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 133 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
+| `backend/tests/` | 166 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
-| `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.2% tokens saved) + review generator |
+| `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 87.9% tokens saved) + review generator |
 | `architecture-review.html` | Generated visual report |
 | `stepcheck-studio-preview.html` | Zero-dependency interactive replay of the 50-turn run (turn scrubber, graph, patch diff, attestation, cost curve) |
-| `backend/cli.py` + `pyproject.toml` | `stepcheck up / benchmark / review / preview / audit / ci / llms` — `llms` regenerates `docs/llms.txt` + `docs/llms-full.txt` (llmstxt.org) from the repo's own files, so AI search engines quote the measured figures; `ci [path]` is the headless PR gatekeeper: every module must parse, match its DSSE attestation, hold no `DIRTY_OMISSION_RISK`, and pass Gates A/B/C with all invariants executed (exit 1 names the module and violation); `.github/workflows/ci.yml` runs it on Ubuntu + Windows |
+| `backend/cli.py` + `pyproject.toml` | `stepcheck up / benchmark / review / preview / audit [--card] / ci [--report] / llms / hooks` — `hooks [path]` installs idempotent Claude Code hook wiring under `.claude/` that calls the gateway's `/v1/step/hook` and allows when the daemon is offline; `ci --report` writes the PR blast-radius and provenance checklist; `audit --card` writes an anonymized SVG badge; `llms` regenerates `docs/llms.txt` + `docs/llms-full.txt` (llmstxt.org) from the repo's own files, so AI search engines quote the measured figures; `ci [path]` is the headless PR gatekeeper: every module must parse, match its DSSE attestation, hold no `DIRTY_OMISSION_RISK`, and pass Gates A/B/C with all invariants executed (exit 1 names the module and violation); `.github/workflows/ci.yml` runs it on Ubuntu + Windows |
 | `backend/audit.py` | `stepcheck audit [path]`: reads Claude Code `~/.claude/projects/*.jsonl`, receipts cache-cliff waste vs skeleton checkouts and dropped-decorator/guard edits + their retry loops → `stepcheck-audit.html` (falls back to `benchmarks/fixtures/sample_session.jsonl`) |
 | `CLAUDE.md` → `.cursorrules` | Agent rules: enforces the StepCheck MCP workflow (init → focused checkout → patch commit → omission check + savings) in Claude Code and Cursor |
 
@@ -36,7 +36,27 @@ stepcheck preview           # stepcheck-studio-preview.html (self-contained repl
 stepcheck audit             # your own cache-cliff waste + Read-tool bloat, no server needed → stepcheck-audit.html
 stepcheck ci backend        # headless gate: parse + attestations + Gates A/B/C for every module (CI/PR)
 stepcheck llms              # docs/llms.txt + docs/llms-full.txt from README, GLOSSARY, LAUNCH and benchmarks/results.json
+stepcheck hooks             # .claude/hooks + settings wiring: Read over threshold -> skeleton, Edit of a locked module -> deny, Stop while dirty -> block
+stepcheck ci . --report     # the headless gate plus a Markdown PR checklist: touched modules, re-verified callers, conserved symbols, in-toto digests
+stepcheck audit --card      # stepcheck-audit-card.svg + a copy-paste badge line; file names and session ids never appear
 ```
+
+## Door 1: accordion compaction and tier routing
+
+Every proxied turn through `/v1/messages` or `/v1/chat/completions` passes a three-band compactor: the last
+four messages stay verbatim, older Python source blocks over 150 tokens are replaced in place by their AST
+skeleton, dead-end turns are pruned, and after a cache-cliff gap the oldest band folds into one OKF
+session-state frame. The dry-run response carries a `stepcheck.compaction` block with per-band token counts.
+Routing is opt-in: `x-stepcheck-tier: auto` (or `STEPCHECK_TIER_POLICY=auto`) sends a focused single-symbol
+turn to `STEPCHECK_FAST_MODEL` first and re-sends it to the requested frontier model only when a gate rejects
+the draft; without the header nothing changes.
+
+## TypeScript and JavaScript projects
+
+`.ts`, `.tsx`, `.js` and `.jsx` files are indexed next to `.py` (declaration files, `node_modules`, `dist`,
+`build` and `out` are skipped). Relative imports become graph edges, top-level declarations render as
+brace-elided skeletons, patch ops splice exact line spans, and Gates A/B plus the DSSE attestation apply
+unchanged; Gate C has no invariants for TypeScript yet, and class members are not individually addressable.
 
 Checkouts and patch ops address methods too: `focus=["StateKernel.commit"]` emits that one method verbatim inside a
 class skeleton, and `replace_symbol` / `delete_symbol` on `"Class.method"` splice only its lines. A name always

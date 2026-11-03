@@ -59,6 +59,10 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     symbol (`@name on symbol`), so dropping `@fixture` from one function is an
     omission even while a sibling still carries it. Method decorators are
     fingerprinted per dotted symbol (`@width.setter on Box.width`)."""
+    if language(path) == "typescript":
+        from . import _ts
+
+        return _ts.analyze(node_id, path, source, project_modules)
     tree = ast.parse(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
@@ -120,6 +124,10 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
 
 
 def statement_count(source: str) -> int:
+    from . import _ts
+
+    if _ts.looks_like_typescript(source):
+        return _ts.statement_count(source)
     return sum(1 for n in ast.walk(ast.parse(source)) if isinstance(n, ast.stmt))
 
 
@@ -136,6 +144,7 @@ def frame_markdown(
     """The OKF frame. On disk: full source + append-only verified[] chain.
     In a CheckoutPayload (`fold_history=True`): superseded attestations fold
     into one summary, and `focus` slices the body to an AST skeleton."""
+    fence = "ts" if language(info.path) == "typescript" else "python"
     meta: dict = {
         "node_id": info.node_id,
         "path": info.path,
@@ -179,7 +188,7 @@ def frame_markdown(
         f"# {info.node_id}\n\n"
         f"Compacted OKF frame for `{info.path}` — "
         f"{len(info.exports)} exports, {len(info.deps)} deps.{note}\n\n"
-        f"```python\n{body_src}```\n"
+        f"```{fence}\n{body_src}```\n"
     )
     return f"---\n{fm}---\n\n{body}"
 
@@ -290,34 +299,51 @@ def _segment(source_lines: list[str], node: ast.stmt) -> str:
     return "".join(source_lines[start - 1 : end])
 
 
-def _skeleton_def(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> str:
+def _skeleton_def(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "", doc: str | None = "first") -> str:
+    """Decorators + signature + `...`; `doc` is "first" (summary line of the
+    docstring), "full", or None (stripped — dependency interfaces)."""
     out = [f"{indent}@{ast.unparse(d)}\n" for d in node.decorator_list]
     kw = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
     out.append(f"{indent}{kw} {_signature(node)}:\n")
-    doc = ast.get_docstring(node)
-    if doc:
-        out.append(f'{indent}    """{doc}"""\n')
+    text = ast.get_docstring(node)
+    if text and doc:
+        out.append(f'{indent}    """{_doc_line(text) if doc == "first" else text}"""\n')
     out.append(f"{indent}    ...\n")
     return "".join(out)
 
 
-def _skeleton_class(node: ast.ClassDef, focus_members: frozenset[str] = frozenset(), lines: list[str] | None = None) -> str:
+def _skeleton_class(
+    node: ast.ClassDef,
+    focus_members: frozenset[str] = frozenset(),
+    lines: list[str] | None = None,
+    *,
+    doc: str | None = "first",
+    method_doc: str | None = "first",
+    keep_methods: set[str] | None = None,
+) -> str:
     """Class header + docstring with every method as a skeleton — except the
-    `focus_members` (dotted focus `Class.method`), emitted verbatim from `lines`."""
+    `focus_members` (dotted focus `Class.method`), emitted verbatim from `lines`.
+    `doc` / `method_doc` pick the docstring treatment (see _skeleton_def); when
+    `keep_methods` is given, only those methods (and the focused ones) are shown
+    and a one-line note counts the rest — the budget backstop."""
     bases = ", ".join(ast.unparse(b) for b in node.bases)
     out = [f"@{ast.unparse(d)}\n" for d in node.decorator_list]
     out.append(f"class {node.name}({bases}):\n" if bases else f"class {node.name}:\n")
-    doc = ast.get_docstring(node)
-    if doc:
-        out.append(f'    """{doc}"""\n')
+    text = ast.get_docstring(node)
+    if text and doc:
+        out.append(f'    """{_doc_line(text) if doc == "first" else text}"""\n')
     members = [n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    if not members and not doc:
+    shown = [m for m in members if keep_methods is None or m.name in keep_methods or m.name in focus_members]
+    hidden = len(members) - len(shown)
+    if not shown and not (text and doc):
         out.append("    ...\n")
-    for m in members:
+    for m in shown:
         if m.name in focus_members and lines is not None:
             out.append(_segment(lines, m))
         else:
-            out.append(_skeleton_def(m, indent="    "))
+            out.append(_skeleton_def(m, indent="    ", doc=method_doc))
+    if hidden:
+        out.append(f"    # + {hidden} method signatures elided\n")
     return "".join(out)
 
 
@@ -326,12 +352,20 @@ def _assign_names(node: ast.stmt) -> list[str]:
     return [ast.unparse(t) for t in targets]
 
 
-def skeleton(source: str, focus: list[str]) -> str:
-    """Slice a module: `focus` defs/classes verbatim; every other def/class as
-    decorators + signature + docstring + `...`; runs of module-level
-    assignments folded into one summary line; imports kept verbatim. A dotted
-    focus `Class.method` keeps the class as a skeleton and emits only that
-    method verbatim — the class-rewrite bottleneck measured on real packages."""
+def skeleton(source: str, focus: list[str], *, elide_methods: bool = False) -> str:
+    """Slice a module in two tiers. `focus=[]`: every def/class as decorators +
+    signature + first docstring line + `...` (every top-level name kept); runs of
+    module-level assignments folded into one summary line; imports verbatim.
+    A non-empty `focus`: the focused defs/classes verbatim; a dotted
+    `Class.method` keeps its class as a skeleton (sibling method signatures with
+    docstrings stripped, `__init__` included) and emits only that method verbatim;
+    sibling classes the focus does not reference collapse to one-line stubs.
+    `elide_methods` (the budget backstop) keeps only `__init__`, the focused
+    methods and the methods the focus references, counting the rest."""
+    from . import _ts
+
+    if _ts.looks_like_typescript(source):
+        return _ts.skeleton(source, focus)
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     keep = {f for f in focus if "." not in f}
@@ -340,6 +374,16 @@ def skeleton(source: str, focus: list[str]) -> str:
         if "." in f:
             owner, _, member = f.partition(".")
             members.setdefault(owner, set()).add(member)
+    focused = bool(focus)
+    referenced: set[str] = set()
+    if focused:
+        for f in focus:
+            _owner_body, group = _resolve_symbol(tree, f)
+            referenced |= _names_in(group)
+            if "." in f:  # the class a focused method lives in: its bases and decorators count too
+                owner = next((s for s in tree.body if isinstance(s, ast.ClassDef) and s.name == f.split(".")[0]), None)
+                if owner is not None:
+                    referenced |= _names_in(owner.bases) | _names_in(owner.decorator_list)
     out: list[str] = []
     pending_assigns: list[str] = []
 
@@ -364,12 +408,25 @@ def skeleton(source: str, focus: list[str]) -> str:
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             out.append(ast.unparse(stmt) + "\n")
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            out.append("\n\n" + (_segment(lines, stmt) if stmt.name in keep else _skeleton_def(stmt)))
+            if stmt.name in keep:
+                out.append("\n\n" + _segment(lines, stmt))
+            else:  # editing view (focused): signatures only; orientation view: summary lines too
+                out.append("\n\n" + _skeleton_def(stmt, doc=None if focused else "first"))
         elif isinstance(stmt, ast.ClassDef):
             if stmt.name in keep:
                 out.append("\n\n" + _segment(lines, stmt))
+            elif stmt.name in members:
+                kept = (members[stmt.name] | {"__init__"} | referenced) if elide_methods else None
+                out.append("\n\n" + _skeleton_class(
+                    stmt, frozenset(members[stmt.name]), lines, method_doc=None, keep_methods=kept
+                ))
+            elif focused and stmt.name not in referenced:
+                out.append("\n\n" + _class_stub(stmt))
+            elif focused:
+                kept = ({"__init__"} | referenced) if elide_methods else None
+                out.append("\n\n" + _skeleton_class(stmt, doc=None, method_doc=None, keep_methods=kept))
             else:
-                out.append("\n\n" + _skeleton_class(stmt, frozenset(members.get(stmt.name, ())), lines))
+                out.append("\n\n" + _skeleton_class(stmt, keep_methods={"__init__"} if elide_methods else None))
         elif isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
             out.append(ast.unparse(stmt) + "\n")  # module docstring
         else:
@@ -380,6 +437,10 @@ def skeleton(source: str, focus: list[str]) -> str:
 
 def interface_skeleton(source: str) -> str:
     """Dependency view: signatures, decorators, docstrings — no bodies, no data."""
+    from . import _ts
+
+    if _ts.looks_like_typescript(source):
+        return _ts.interface_skeleton(source)
     tree = ast.parse(source)
     parts: list[str] = []
     for stmt in tree.body:
@@ -418,6 +479,10 @@ def apply_patch(source: str, patch: list[dict]) -> str:
     whole definition group — `@overload` stubs plus the implementation, a
     property getter with its setter — never just the first def.
     Raises ValueError on a bad op."""
+    from . import _ts
+
+    if _ts.looks_like_typescript(source):
+        return _ts.apply_patch(source, patch)
     for op in patch:
         kind = op.get("op")
         if kind == "append":
@@ -461,6 +526,10 @@ def apply_patch(source: str, patch: list[dict]) -> str:
 
 def symbol_names(source: str) -> list[str]:
     """Top-level def/class names in file order (the auto-skeleton symbol index)."""
+    from . import _ts
+
+    if _ts.looks_like_typescript(source):
+        return _ts.symbol_names(source)
     return [
         s.name
         for s in ast.parse(source).body
@@ -598,7 +667,7 @@ def module_name(path: str) -> str:
     `pkg/__init__.py` -> `pkg`; a root-level `__init__.py` stays `__init__`."""
     if not path:
         raise ValueError("empty module path")
-    parts = path.replace("\\", "/").removesuffix(".py").split("/")
+    parts = strip_suffix(path.replace("\\", "/")).split("/")
     if parts[-1] == "__init__" and len(parts) > 1:
         parts = parts[:-1]
     return ".".join(parts)
@@ -606,7 +675,7 @@ def module_name(path: str) -> str:
 
 def _package_of(path: str) -> str:
     """Dotted package a file lives in (`pkg/__init__.py` and `pkg/x.py` -> `pkg`)."""
-    parts = path.replace("\\", "/").removesuffix(".py").split("/")
+    parts = strip_suffix(path.replace("\\", "/")).split("/")
     return ".".join(parts[:-1])
 
 
@@ -628,7 +697,7 @@ def module_map(paths: dict[str, str]) -> dict[str, str]:
     candidates: dict[str, set[str]] = {}
     for nid, p in paths.items():
         parts = p.replace("\\", "/").split("/")
-        names = {parts[-1].removesuffix(".py")}
+        names = {strip_suffix(parts[-1])}
         if len(parts) > 1:
             names.add(module_name("/".join(parts[1:])))
         for name in names:
@@ -694,6 +763,10 @@ def _import_records(
 def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str]) -> dict[str, set[str]]:
     """Dependency node_id -> names this module imports from it (empty when it
     imports the module object itself). Unparseable source resolves to nothing."""
+    if language(path) == "typescript":
+        from . import _ts
+
+        return _ts.resolve_imports(node_id, path, source, modules)
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -757,3 +830,68 @@ def _group_span(source_lines: list[str], group: list[ast.stmt]) -> tuple[int, in
     start, _ = _symbol_span(source_lines, group[0])
     _, end = _symbol_span(source_lines, group[-1])
     return start, end
+
+
+def _doc_line(doc: str) -> str:
+    """The summary line of a docstring: its first non-empty line."""
+    for line in doc.strip().splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _names_in(nodes) -> set[str]:
+    """Every `ast.Name` id and `ast.Attribute` attr under the given nodes — the
+    names a piece of code can possibly refer to (reference analysis for focus
+    scoping; conservative on purpose)."""
+    out: set[str] = set()
+    for node in nodes:
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name):
+                out.add(n.id)
+            elif isinstance(n, ast.Attribute):
+                out.add(n.attr)
+    return out
+
+
+def _class_stub(node: ast.ClassDef) -> str:
+    """One-line stub for a sibling class the focus does not reference."""
+    bases = ", ".join(ast.unparse(b) for b in node.bases)
+    out = [f"@{ast.unparse(d)}\n" for d in node.decorator_list]
+    out.append(f"class {node.name}({bases}): ...\n" if bases else f"class {node.name}: ...\n")
+    return "".join(out)
+
+
+_TRACKED_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")
+_EXCLUDED_DIRS = frozenset({"node_modules", "dist", "build", "out", "coverage", ".stepcheck"})
+
+
+def language(path: str) -> str:
+    """`python` for `.py`, `typescript` for the TypeScript/JavaScript suffixes the
+    kernel tracks (`.d.ts` declaration files are never tracked)."""
+    p = path.replace("\\", "/").lower()
+    if p.endswith(".py"):
+        return "python"
+    if p.endswith(_TRACKED_SUFFIXES[1:]) and not p.endswith(".d.ts"):
+        return "typescript"
+    return "other"
+
+
+def strip_suffix(path: str) -> str:
+    """Path without its tracked source suffix (`pkg/models.py` -> `pkg/models`,
+    `src/App.tsx` -> `src/App`)."""
+    for suffix in _TRACKED_SUFFIXES:
+        if path.endswith(suffix):
+            return path[: -len(suffix)]
+    return path
+
+
+def tracked_files(root: Path) -> list[Path]:
+    """Every source file the kernel indexes under `root`: Python plus
+    TypeScript/JavaScript, skipping `.d.ts`, hidden entries, `.stepcheck/` and
+    build/dependency directories (`node_modules`, `dist`, `build`, `out`)."""
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and language(str(p)) != "other"
+        and not any(part in _EXCLUDED_DIRS or part.startswith(".") for part in p.relative_to(root).parts)
+    )

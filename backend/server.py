@@ -376,7 +376,19 @@ async def _run_firewall(
     node_id: str | None,
     api: str,
     focus: list[str] | None = None,
+    headers: dict | None = None,
 ) -> dict:
+    """Door 1 firewall for one proxied turn. The latest assistant step is folded
+    through the gates; every other assistant turn is parked as a draft. What is
+    forwarded is: the caller's system prompts, the compact CheckoutPayload of the
+    active node, and the conversation after three-band accordion compaction
+    (recent band verbatim, middle band with large source blocks skeletonized,
+    oldest band folded into a session-state frame after a cache cliff). The
+    `x-stepcheck-tier` header (or STEPCHECK_TIER_POLICY) selects the model tier;
+    without it the request's own model is used, as before."""
+    from kernel import _accordion
+
+    hdrs = {str(k).lower(): v for k, v in (headers or {}).items()}
     messages: list[dict] = body.get("messages", [])
     systems = [
         _msg_text(m) for m in messages if m.get("role") == "system"
@@ -419,16 +431,21 @@ async def _run_firewall(
                 "content": "## StepCheck CheckoutPayload\n\n" + payload.rendered(),
             }
         )
-    final_user = next(
-        (m for m in reversed(messages) if m.get("role") == "user"), None
+    last_turn_at = _accordion.parse_timestamp(hdrs.get("x-stepcheck-last-turn-at"))
+    if last_turn_at is None:
+        last_turn_at = _accordion.latest_message_timestamp(messages)
+    compaction = _accordion.ContextCompactor().compact(
+        messages,
+        is_step=lambda m: m.get("role") == "assistant" and _extract_step(_msg_text(m)) is not None,
+        last_turn_at=last_turn_at,
+        summary=lambda: _session_summary(session_id, node_id),
     )
-    if final_user is not None:
-        sent.append({"role": "user", "content": _msg_text(final_user)})
+    sent.extend(compaction.messages)
 
     raw_tokens = sum(_count(_msg_text(m)) for m in messages) + sum(
         _count(s) for s in systems if api == "anthropic"
     )
-    sent_tokens = sum(_count(m["content"]) for m in sent)
+    sent_tokens = sum(_count(_msg_text(m)) for m in sent)
     return {
         "session_id": session_id,
         "node_id": node_id,
@@ -436,6 +453,8 @@ async def _run_firewall(
         "sent_tokens": sent_tokens,
         "tokens_pruned": raw_tokens - sent_tokens,
         "sent_messages": sent,
+        "compaction": compaction.report(),
+        "routing": _route(hdrs, body, node_id, focus, last_step, commit_info),
         "commit": commit_info,
         "telemetry": _telemetry_json(session_id),
     }
@@ -463,7 +482,8 @@ def _session_from(request: Request, body: dict) -> tuple[str, str | None, list[s
 async def _maybe_forward(
     request: Request, body: dict, fw: dict, api: str
 ) -> dict | None:
-    """BYOK upstream routing: only when the caller supplies key AND base URL."""
+    """BYOK upstream routing: only when the caller supplies key AND base URL.
+    The model forwarded is the one the tier router chose (`fw["routing"]`)."""
     upstream = request.headers.get("x-stepcheck-upstream") or os.environ.get(
         "STEPCHECK_UPSTREAM_BASE"
     )
@@ -475,6 +495,9 @@ async def _maybe_forward(
     out_body["messages"] = [
         m for m in fw["sent_messages"] if not (api == "anthropic" and m["role"] == "system")
     ]
+    routed_model = (fw.get("routing") or {}).get("model")
+    if routed_model:
+        out_body["model"] = routed_model
     headers = {"content-type": "application/json"}
     if api == "anthropic":
         out_body["system"] = "\n\n".join(
@@ -504,7 +527,7 @@ _DRY_NOTICE = (
 async def chat_completions(request: Request) -> dict:
     body = await request.json()
     session_id, node_id, focus = _session_from(request, body)
-    fw = await _run_firewall(body, session_id, node_id, api="openai", focus=focus)
+    fw = await _run_firewall(body, session_id, node_id, api="openai", focus=focus, headers=dict(request.headers))
     forwarded = await _maybe_forward(request, body, fw, api="openai")
     if forwarded is not None:
         return forwarded
@@ -533,7 +556,7 @@ async def chat_completions(request: Request) -> dict:
 async def anthropic_messages(request: Request) -> dict:
     body = await request.json()
     session_id, node_id, focus = _session_from(request, body)
-    fw = await _run_firewall(body, session_id, node_id, api="anthropic", focus=focus)
+    fw = await _run_firewall(body, session_id, node_id, api="anthropic", focus=focus, headers=dict(request.headers))
     forwarded = await _maybe_forward(request, body, fw, api="anthropic")
     if forwarded is not None:
         return forwarded
@@ -576,6 +599,62 @@ class _SpaStaticFiles(StaticFiles):
 
 if STUDIO_DIST.exists():
     app.mount("/studio", _SpaStaticFiles(directory=str(STUDIO_DIST), html=True), name="studio")
+
+
+@app.post("/v1/step/hook")
+async def step_hook(request: Request) -> dict:
+    """Warm fast path for Claude Code lifecycle hooks. The installed hook script
+    (`stepcheck hooks`) relays its stdin JSON here and prints the answer, so a
+    `PreToolUse` Read of a big tracked module comes back as the `focus=[]`
+    skeleton, an Edit of a LOCKED module is denied with the Gate A diagnostic,
+    and `Stop` is blocked while DIRTY_OMISSION_RISK nodes remain — all against
+    the in-memory kernel, no interpreter start-up. Policy: hooks.decide."""
+    import hooks
+
+    try:
+        event = await request.json()
+    except ValueError:
+        event = {}
+    return hooks.decide(event if isinstance(event, dict) else {}, KERNEL)
+
+
+def _session_summary(session_id: str, node_id: str | None) -> str:
+    """The oldest band after a cache cliff: one compact OKF session-state frame —
+    every node's status and latest attestation digest. The active node's own
+    compact frame is already injected as the CheckoutPayload system message."""
+    graph = _or_404(KERNEL.graph, session_id)
+    lines = ["## StepCheck session state (older turns folded after a cache cliff)", ""]
+    for n in graph["nodes"]:
+        att = n.get("attestation")
+        digest = f", attested {att['payload']['sha256'][:12]}" if att else ""
+        active = " (active; compact frame above)" if n["node_id"] == node_id else ""
+        lines.append(f"- {n['node_id']}: {n['status']}{digest}{active}")
+    return "\n".join(lines)
+
+
+def _route(headers: dict, body: dict, node_id: str | None, focus: list[str] | None,
+           last_step: tuple[str, object] | None, commit_info: dict | None) -> dict:
+    """Gate-backed model tiering. Policy from `x-stepcheck-tier` or
+    STEPCHECK_TIER_POLICY (default `frontier`: the request's model, unchanged).
+    `auto` sends a focused single-symbol turn to STEPCHECK_FAST_MODEL and, when
+    the draft that turn produced was rejected at a gate, escalates this turn
+    back to the frontier model named in the request."""
+    policy = str(headers.get("x-stepcheck-tier") or os.environ.get("STEPCHECK_TIER_POLICY", "frontier")).strip().lower()
+    frontier = body.get("model") or ""
+    fast = os.environ.get("STEPCHECK_FAST_MODEL", "claude-haiku-4-5")
+    single_patch = (
+        last_step is not None and last_step[0] == "patch" and isinstance(last_step[1], list)
+        and len(last_step[1]) == 1 and isinstance(last_step[1][0], dict) and last_step[1][0].get("op") == "replace_symbol"
+    )
+    focused = bool(node_id) and ((focus is not None and len(focus) == 1) or single_patch)
+    if policy == "fast" or (policy == "auto" and focused):
+        tier, model = "fast", fast
+    else:
+        tier, model = "frontier", frontier
+    escalated, gate = False, None
+    if tier == "fast" and commit_info and not commit_info.get("accepted"):
+        escalated, gate, tier, model = True, commit_info.get("gate"), "frontier", frontier
+    return {"policy": policy, "tier": tier, "model": model, "escalated": escalated, "gate": gate, "focused_turn": focused}
 
 
 if __name__ == "__main__":

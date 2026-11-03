@@ -83,6 +83,9 @@ SAMPLE_SESSION = ROOT / "benchmarks" / "fixtures" / "sample_session.jsonl"
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
+    """`stepcheck audit [path] --out … [--json …] [--card --card-out …]`: receipt the
+    cache-cliff waste and Read-tool bloat in Claude Code transcripts; `--card`
+    adds a zero-code-leak SVG + Markdown badge built from the totals only."""
     import audit
 
     target = Path(args.log_path).expanduser() if args.log_path else Path.home() / ".claude" / "projects"
@@ -102,6 +105,11 @@ def cmd_audit(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.write_text(audit.html_receipt(report, note), encoding="utf-8")
     print(f"\nreceipt → {audit.display_path(out)}")
+    if getattr(args, "card", False):
+        card = Path(args.card_out)
+        card.write_text(_audit_card_svg(report["total"]), encoding="utf-8", newline="\n")
+        print(f"card → {audit.display_path(card)}\n")
+        print(_audit_card_md(report["total"]), end="")
     if args.json:
         Path(args.json).write_text(__import__("json").dumps(report, indent=2), encoding="utf-8")
     return 0
@@ -114,20 +122,26 @@ def cmd_audit(args: argparse.Namespace) -> int:
 def _ci_parse(root: Path) -> list[tuple[str, str]]:
     """(file, problem) for every tracked module that does not parse. Decodes the
     way the kernel does (UTF-8, BOM stripped), so a file the kernel tracks never
-    fails here."""
+    fails here. Python is parsed with `ast`; TypeScript / JavaScript modules get
+    the kernel's balanced-delimiter check."""
     import ast
 
-    from kernel import _okf
+    from kernel import _okf, _ts
 
     problems: list[tuple[str, str]] = []
-    for p in sorted(root.rglob("*.py")):
-        if ".stepcheck" in p.parts or p.name.startswith("."):
-            continue
+    for p in _okf.tracked_files(root):
         rel = str(p.relative_to(root))
         try:
-            ast.parse(_okf.decode_source(p.read_bytes()), filename=rel)
+            source = _okf.decode_source(p.read_bytes())
         except UnicodeDecodeError:
             continue  # the kernel leaves non-UTF-8 files untracked
+        if _okf.language(rel) == "typescript":
+            problem = _ts.syntax_problem(source)
+            if problem:
+                problems.append((rel, f"Gate A: invalid TypeScript syntax: {problem}"))
+            continue
+        try:
+            ast.parse(source, filename=rel)
         except SyntaxError as exc:
             problems.append((rel, f"Gate A: invalid AST syntax: {exc.msg} (line {exc.lineno})"))
     return problems
@@ -235,6 +249,16 @@ def cmd_ci(args: argparse.Namespace) -> int:
         return fail(failures, "gates")
     print(f"stepcheck ci: PASS — {len(rows)} modules verified through Gates A·B·C, "
           f"{executed} invariants executed")
+    if getattr(args, "report", False):
+        text = _ci_report(root)
+        if text is None:
+            print("stepcheck ci --report: no StepCheck session is registered for this root "
+                  "(open one with init_project_session, then re-run)")
+            return 1
+        print()
+        print(text, end="")
+        if args.report_out:
+            Path(args.report_out).write_text(text, encoding="utf-8", newline="\n")
     return 0
 
 
@@ -259,17 +283,28 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("--out", default="stepcheck-audit.html", help="receipt path (default: ./stepcheck-audit.html)")
     au.add_argument("--json", default=None, help="also write the raw report as JSON here")
     au.add_argument("--limit", type=int, default=0, help="only the N most recent log files")
+    au.add_argument("--card", action="store_true", help="also write a zero-code-leak SVG card and print a Markdown badge")
+    au.add_argument("--card-out", default="stepcheck-audit-card.svg", help="card path (default: ./stepcheck-audit-card.svg)")
     au.set_defaults(fn=cmd_audit)
 
     ci = sub.add_parser("ci", help="headless CI/PR gatekeeper: every module must parse, match its attestation, "
                                    "and pass Gates A/B/C with all invariants executed (exit 1 on the first violation)")
     ci.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
+    ci.add_argument("--report", action="store_true",
+                    help="after a PASS, print the PR blast-radius & provenance checklist for the root's latest session")
+    ci.add_argument("--report-out", default=None, help="also write the checklist Markdown here")
     ci.set_defaults(fn=cmd_ci)
 
     ll = sub.add_parser("llms", help="generate llms.txt + llms-full.txt (llmstxt.org) from the repository's own files")
     ll.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "docs"),
                     help="output directory (default: <repo>/docs)")
     ll.set_defaults(fn=cmd_llms)
+
+    hk = sub.add_parser("hooks", help="install the Claude Code lifecycle hooks (.claude/hooks + settings.json) "
+                                     "that relay to the gateway's warm POST /v1/step/hook")
+    hk.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
+    hk.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
+    hk.set_defaults(fn=cmd_hooks)
 
     args = parser.parse_args(argv)
     return args.fn(args)
@@ -354,6 +389,259 @@ def cmd_llms(args: argparse.Namespace) -> int:
         (out_dir / name).write_bytes(text.encode("utf-8"))
         print(f"wrote {out_dir / name} ({len(text.encode('utf-8')):,} bytes)")
     return 0
+
+
+def _registry_latest_session(root: Path) -> str | None:
+    """Newest registered StepCheck session whose project root is `root`."""
+    import hooks
+
+    root = root.resolve()
+    hit = None
+    for sid, r in hooks.registry().items():  # insertion order: the newest session wins
+        if Path(r).resolve() == root:
+            hit = sid
+    return hit
+
+
+def _ci_report(root: Path, session_id: str | None = None) -> str | None:
+    """PR blast-radius & decision-provenance checklist for the root's latest
+    session: touched modules, dependents re-verified or still dirty, Gate B
+    conserved symbols, Gate C executed invariants, per-commit DSSE digests and
+    the in-toto Statement v1 envelopes. A pure function of the session state
+    (sorted, no timestamps): two runs over the same state are byte-identical."""
+    import base64
+    import json
+
+    from kernel import StateKernel
+
+    root = root.resolve()
+    sid = session_id or _registry_latest_session(root)
+    if not sid:
+        return None
+    kernel = StateKernel()
+    try:
+        graph = kernel.graph(sid)
+    except KeyError:
+        return None
+    nodes = {n["node_id"]: n for n in graph["nodes"]}
+    touched = sorted(nid for nid, n in nodes.items() if n.get("attestation"))
+
+    def short(digest: str | None) -> str:
+        return (digest or "")[:16]
+
+    lines = [
+        "# StepCheck decision-provenance report",
+        "",
+        f"Project `{root.name}` · session `{sid}` · {len(touched)} module(s) touched, {len(nodes)} tracked.",
+        "",
+        "## Touched modules",
+        "",
+        "| Module | Path | Status | Commits | Latest DSSE sha256 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for nid in touched:
+        n = nodes[nid]
+        att = n["attestation"] or {}
+        lines.append(f"| `{nid}` | `{n['path'].replace(chr(92), '/')}` | {n['status']} | {n.get('verified', 0)} | "
+                     f"`{short((att.get('payload') or {}).get('sha256'))}…` |")
+    lines += ["", "## Blast radius (dependents of touched modules)", ""]
+    any_dep = False
+    for nid in touched:
+        for dep in sorted(d for d, n in nodes.items() if nid in n.get("deps", []) and d != nid):
+            any_dep = True
+            n = nodes[dep]
+            if n["status"] == "DIRTY_OMISSION_RISK":
+                state = "NOT re-verified — DIRTY_OMISSION_RISK (blocks finalize)"
+            elif n.get("attestation"):
+                state = f"re-verified — `{short(n['attestation']['payload']['sha256'])}…`"
+            else:
+                state = "unaffected (exports of its dependency unchanged)"
+            lines.append(f"- `{dep}` depends on `{nid}`: {state}")
+    if not any_dep:
+        lines.append("- no tracked module depends on a touched module")
+    lines += ["", "## Conserved symbols (Gate B fingerprints every commit had to keep)", ""]
+    for nid in touched:
+        syms = nodes[nid].get("preserved_symbols", [])
+        lines.append(f"- `{nid}`: " + (", ".join(f"`{s}`" for s in syms) if syms else "none"))
+    lines += ["", "## Executed invariants (Gate C)", ""]
+    for nid in touched:
+        n = nodes[nid]
+        mined = set(n.get("invariants_auto_mined", []))
+        invs = n.get("invariants", [])
+        if not invs:
+            lines.append(f"- `{nid}`: none")
+        for inv in invs:
+            lines.append(f"- `{nid}`: `{inv}`" + (" (auto-mined)" if inv in mined else " (hand-written)"))
+    lines += ["", "## Attestations (DSSE envelopes)", "", "| Module | payloadType | sha256 | keyid |", "| --- | --- | --- | --- |"]
+    for nid in touched:
+        att = nodes[nid]["attestation"]
+        sig = (att.get("signatures") or [{}])[0]
+        lines.append(f"| `{nid}` | `{att.get('payloadType')}` | `{att['payload']['sha256']}` | `{sig.get('keyid')}` |")
+    lines += ["", "## Provenance (in-toto Statement v1)", "", "| Module | payloadType | subject sha256 | signature |", "| --- | --- | --- | --- |"]
+    for nid in touched:
+        env = kernel.provenance(sid, nid)
+        statement = json.loads(base64.b64decode(env["payload"]))
+        subject = statement["subject"][0]["digest"]["sha256"]
+        lines.append(f"| `{nid}` | `{env['payloadType']}` | `{subject}` | `{env['signatures'][0]['sig']}` |")
+    dirty = sorted(nid for nid, n in nodes.items() if n["status"] == "DIRTY_OMISSION_RISK")
+    lines += ["", "## Verdict", ""]
+    lines.append(
+        "- can_finalize: **false** — " + ", ".join(f"`{d}`" for d in dirty) + " still DIRTY_OMISSION_RISK"
+        if dirty else "- can_finalize: **true** — no DIRTY_OMISSION_RISK nodes"
+    )
+    return "\n".join(lines) + "\n"
+
+
+_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""StepCheck lifecycle hook, installed by `stepcheck hooks`. Relays Claude Code's
+hook payload (stdin JSON) to the warm gateway endpoint and prints its answer.
+When the gateway is offline it allows the tool / stop silently with one line on
+stderr: a dead socket must never block the agent. Standard library only."""
+import json
+import os
+import sys
+import urllib.request
+
+URL = os.environ.get("STEPCHECK_HOOK_URL", "__STEPCHECK_HOOK_URL__")
+
+
+def main() -> int:
+    try:
+        event = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return 0
+    if not isinstance(event, dict):
+        return 0
+    event.setdefault("cwd", os.getcwd())
+    try:
+        req = urllib.request.Request(URL, data=json.dumps(event).encode("utf-8"),
+                                     headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2"))) as r:
+            out = json.loads(r.read() or b"{}")
+    except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout: allow
+        sys.stderr.write(f"stepcheck hook: gateway offline ({exc.__class__.__name__}); allowing. Run `stepcheck up`.\\n")
+        return 0
+    if out:
+        sys.stdout.write(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+'''
+
+
+def cmd_hooks(args: argparse.Namespace) -> int:
+    """`stepcheck hooks [path] [--url …]`: write `.claude/hooks/stepcheck_hook.py`
+    and wire it into `.claude/settings.json` for PreToolUse (Read/Edit/Write/
+    MultiEdit/NotebookEdit) and Stop. Idempotent: other settings keys and other
+    hooks are kept, and a second run changes no byte."""
+    import json
+
+    root = Path(args.path).resolve()
+    hooks_dir = root / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    script = hooks_dir / "stepcheck_hook.py"
+    text = _HOOK_SCRIPT.replace("__STEPCHECK_HOOK_URL__", args.url)
+    if not script.exists() or script.read_text(encoding="utf-8") != text:
+        script.write_text(text, encoding="utf-8", newline="\n")
+    settings = root / ".claude" / "settings.json"
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    hooks_cfg = data.setdefault("hooks", {})
+    command = 'python "$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py"'
+    added = []
+    for event, matcher in (("PreToolUse", "Read|Edit|Write|MultiEdit|NotebookEdit"), ("Stop", None)):
+        entries = hooks_cfg.setdefault(event, [])
+        if any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
+            continue
+        entry: dict = {"matcher": matcher} if matcher else {}
+        entry["hooks"] = [{"type": "command", "command": command, "timeout": 10}]
+        entries.append(entry)
+        added.append(event)
+    rendered = json.dumps(data, indent=2) + "\n"
+    if not settings.exists() or settings.read_text(encoding="utf-8") != rendered:
+        settings.write_text(rendered, encoding="utf-8", newline="\n")
+    print(f"stepcheck hooks: {script.relative_to(root)} relays to {args.url}")
+    print(f"  {settings.relative_to(root)}: " + (f"added {', '.join(added)}" if added else "already wired (no change)"))
+    print("  offline gateway = allow silently; start it with `stepcheck up`")
+    return 0
+
+
+def _fmt_int(n) -> str:
+    return f"{int(n):,}"
+
+
+def _fmt_usd(x) -> str:
+    return f"${float(x):,.2f}"
+
+
+def _fmt_pct(x) -> str:
+    return f"{float(x):.1f}%"
+
+
+def _audit_card_svg(total: dict) -> str:
+    """Shareable audit card from the audit totals only: no file names, session
+    ids, paths or code can reach it, because none are inputs."""
+    est = "" if total.get("skeleton_exact") else " (est.)"
+    v = {
+        "sessions": _fmt_int(total["sessions"]), "turns": _fmt_int(total["assistant_turns"]),
+        "tax": _fmt_usd(total["gap_waste_usd"]), "gap_turns": _fmt_int(total["cache_gap_turns"]),
+        "rebilled": _fmt_int(total["gap_rebilled_tokens"]), "compaction": _fmt_pct(total["read_saving_pct"]),
+        "read_tokens": _fmt_int(total["read_tokens"]), "skeleton_tokens": _fmt_int(total["skeleton_tokens"]),
+        "regressions": _fmt_int(total["regressions"]), "retries": _fmt_int(total["retry_turns"]),
+    }
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-label="StepCheck audit card">\n'
+        "  <title>StepCheck audit card</title>\n"
+        "  <style>\n"
+        "    .bg { fill: #0f172a; } .tile { fill: #1e293b; }\n"
+        "    .t { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; fill: #e2e8f0; }\n"
+        "    .k { font-size: 13px; fill: #94a3b8; } .v { font-size: 30px; font-weight: 700; }\n"
+        "    .s { font-size: 12px; fill: #64748b; } .h { font-size: 15px; font-weight: 600; }\n"
+        "    .tax { fill: #f87171; } .ok { fill: #34d399; } .warn { fill: #fbbf24; }\n"
+        "  </style>\n"
+        '  <rect class="bg" width="720" height="260" rx="14"/>\n'
+        '  <text class="t h" x="24" y="36">stepcheck audit</text>\n'
+        f'  <text class="t s" x="696" y="36" text-anchor="end">{v["sessions"]} sessions · {v["turns"]} assistant turns · no file names, no code</text>\n'
+        '  <rect class="tile" x="24" y="56" width="216" height="150" rx="10"/>\n'
+        '  <text class="t k" x="40" y="84">cache-cliff tax</text>\n'
+        f'  <text class="t v tax" x="40" y="126">{v["tax"]}</text>\n'
+        f'  <text class="t s" x="40" y="150">{v["gap_turns"]} turns resumed past the cache TTL</text>\n'
+        f'  <text class="t s" x="40" y="168">{v["rebilled"]} tokens re-billed at full rate</text>\n'
+        '  <text class="t s" x="40" y="186">above cache-read price</text>\n'
+        '  <rect class="tile" x="252" y="56" width="216" height="150" rx="10"/>\n'
+        '  <text class="t k" x="268" y="84">read-to-skeleton compaction</text>\n'
+        f'  <text class="t v ok" x="268" y="126">{v["compaction"]}</text>\n'
+        f'  <text class="t s" x="268" y="150">{v["read_tokens"]} tokens pulled with Read</text>\n'
+        f'  <text class="t s" x="268" y="168">{v["skeleton_tokens"]} as AST skeletons{est}</text>\n'
+        '  <text class="t s" x="268" y="186">focus=[] checkouts</text>\n'
+        '  <rect class="tile" x="480" y="56" width="216" height="150" rx="10"/>\n'
+        '  <text class="t k" x="496" y="84">regressions a gate would block</text>\n'
+        f'  <text class="t v warn" x="496" y="126">{v["regressions"]}</text>\n'
+        '  <text class="t s" x="496" y="150">edits that dropped a decorator</text>\n'
+        '  <text class="t s" x="496" y="168">or a leading guard clause</text>\n'
+        f'  <text class="t s" x="496" y="186">{v["retries"]} retry turns that followed</text>\n'
+        '  <text class="t s" x="24" y="236">Generated locally by stepcheck audit from Claude Code transcripts. Numbers only; the per-session receipt stays on your machine.</text>\n'
+        "</svg>\n"
+    )
+
+
+def _audit_card_md(total: dict) -> str:
+    """Copy-paste Markdown badge line with the same five numbers as the card."""
+    est = "" if total.get("skeleton_exact") else " (est.)"
+    return (
+        f"**stepcheck audit** · {_fmt_int(total['sessions'])} sessions / {_fmt_int(total['assistant_turns'])} turns · "
+        f"cache-cliff tax **{_fmt_usd(total['gap_waste_usd'])}** ({_fmt_int(total['cache_gap_turns'])} resumes past the TTL, "
+        f"{_fmt_int(total['gap_rebilled_tokens'])} tokens re-billed) · Read → AST skeleton **{_fmt_pct(total['read_saving_pct'])}** less "
+        f"({_fmt_int(total['read_tokens'])} → {_fmt_int(total['skeleton_tokens'])}{est}) · "
+        f"**{_fmt_int(total['regressions'])}** edits dropped a decorator/guard a gate would have blocked "
+        f"({_fmt_int(total['retry_turns'])} retry turns)\n"
+    )
 
 
 if __name__ == "__main__":

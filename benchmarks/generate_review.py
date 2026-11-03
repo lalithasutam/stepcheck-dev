@@ -89,7 +89,7 @@ def main() -> None:
         for e in RESULTS["gate_events"]
     )
     html = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"/>
+<html lang="en"><head><meta charset="utf-8"/><link rel="llms-txt" href="https://lalithasutam.github.io/stepcheck-dev/llms.txt"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>StepCheck Dev — Architecture Review</title>
 <style>

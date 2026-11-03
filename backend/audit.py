@@ -300,7 +300,7 @@ def html_receipt(report: dict, source_note: str) -> str:
         for s in report["sessions"]
     )
     gen = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="llms-txt" href="https://lalithasutam.github.io/stepcheck-dev/llms.txt"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="dark"/>
 <title>StepCheck audit receipt</title>
 <style>
