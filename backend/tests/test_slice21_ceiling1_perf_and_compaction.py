@@ -391,6 +391,10 @@ def test_statekernel_method_focus_is_half_the_class_focus_on_the_real_kernel(ker
     # (36.3%); after, 1,904 against 5,535 (34.4%). Slices 23–24 then added
     # `record_event`, `events` and `compliance_bundle` to StateKernel: 2,046
     # against 6,789 (30.1%). The method view tracks the class's own signatures
-    # by design, so the absolute floor carries headroom for that growth:
-    assert method.token_count < 2300, (method.token_count, whole.token_count)
+    # by design, so the absolute floor carries headroom for that growth.
+    # Slice 27 renders the same-file callees of the focus verbatim, within a
+    # 1,000-token callee budget (`_okf.CALLEE_TOKEN_BUDGET`): 3,063 against
+    # 8,275 (37.0%) on 2026-11-05. The floor is the old one plus that budget:
+    assert method.token_count < 2300 + 1000, (method.token_count, whole.token_count)
+    assert "Same-file callees of the focus, expanded verbatim: StateKernel._flush, StateKernel._get" in method.frame_markdown
     assert method.token_count <= 0.4 * whole.token_count, (method.token_count, whole.token_count)

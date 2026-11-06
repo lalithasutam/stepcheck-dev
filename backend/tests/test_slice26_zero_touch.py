@@ -109,7 +109,14 @@ def test_native_edit_and_write_enforce_gates_a_b_c_on_active_modules(client, pro
         },
     )
     assert valid_sig_edit == {}
+    # The hook only verifies (dry run); the agent's Edit tool writes the bytes …
+    billing = project / "billing.py"
+    assert "currency" not in billing.read_text(encoding="utf-8")
+    billing.write_text(billing.read_text(encoding="utf-8").replace(
+        "def charge(user: str, amount_cents: int) -> dict:",
+        'def charge(user: str, amount_cents: int, currency: str = "USD") -> dict:'), encoding="utf-8", newline="\n")
 
+    # … and the Stop hook adopts them through the gates, dirtying the dependent.
     stop_out = _hook(client, hook_event_name="Stop", cwd=str(project))
     assert stop_out["decision"] == "block" and "reports" in stop_out["reason"]
 

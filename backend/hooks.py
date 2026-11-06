@@ -6,7 +6,7 @@ to) and callable offline by the CLI, so both paths give the same answer.
 
 Contract (Claude Code hooks; verified in ~/.claude/skills/update-config and
 the official plugin-dev/hook-development skill): the hook receives one JSON
-object (hook_event_name, session_id, cwd, 	ool_name, 	ool_input,
+object (hook_event_name, session_id, cwd, tool_name, tool_input,
 stop_hook_active, ...). For PreToolUse the decision is
 {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision":
 "allow" | "deny" | "ask", "permissionDecisionReason": ..., "additionalContext": ...}};
@@ -17,14 +17,20 @@ Policy:
 - Zero-touch session auto-init: if a hook arrives for a project root with no
   registered session yet, the kernel automatically opens one on cwd.
 - PreToolUse Read of a tracked Python/TS module whose raw text exceeds the
-  token threshold: deny unscoped full-file reads and hand back the ocus=[]
-  OKF skeleton as dditionalContext; allow scoped line-slice reads
+  token threshold: deny unscoped full-file reads and hand back the focus=[]
+  OKF skeleton as additionalContext; allow scoped line-slice reads
   (limit <= 120) so agents can inspect individual symbol spans directly.
 - PreToolUse Edit / Write / MultiEdit / NotebookEdit:
   - on a LOCKED module: deny with the Gate A diagnostic.
-  - on an active tracked module when edit content is supplied: stage the edit
-    and verify through Gates A, B, and C before bytes land on disk; deny on any
-    gate violation so the agent self-corrects on the next turn.
+  - on an active tracked module when edit content is supplied: apply the edit
+    to the file as it is on disk (what the tool will write) and verify the
+    result through Gates A, B, and C with a dry-run commit; deny on any gate
+    violation so the agent self-corrects on the next turn. Nothing is written:
+    the tool writes, and the next hook call adopts those bytes.
+- Every PreToolUse first `sync`s the target node, and Stop syncs the whole
+  session: bytes the agent's tools (or git, or a formatter) wrote are adopted
+  through the gates, so the session never goes stale and dependents of a
+  changed signature turn DIRTY_OMISSION_RISK.
 - Stop: block while any module of the project's session holds
   DIRTY_OMISSION_RISK, naming them; stop_hook_active short-circuits.
 Everything else is allowed silently.
@@ -158,6 +164,8 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
     node = _node_for(kernel, sid, root, target)
     if node is None:
         return {}  # not a tracked module: the tool is fine
+    if kernel.sync(sid, node["node_id"])["synced"]:
+        node = _node_for(kernel, sid, root, target)  # status / size after adopting the tool's last write
     if tool == "Read":
         limit = tool_input.get("limit")
         if limit is not None:
@@ -184,14 +192,18 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
             context,
         )
     if tool in EDIT_TOOLS and node["status"] == "LOCKED":
-        verdict = kernel.commit(sid, node["node_id"], source=kernel.node_source(sid, node["node_id"]))  # Gate A speaks for itself
+        verdict = kernel.commit(sid, node["node_id"], source=kernel.node_source(sid, node["node_id"]),
+                                dry_run=True)  # Gate A speaks for itself
         reason = str(verdict.error) if verdict.error else f"node '{node['node_id']}' is LOCKED"
         return _deny(f"StepCheck Gate A: {reason}. Unlock it or edit through the gates.")
     if tool in EDIT_TOOLS and _has_edit_payload(tool, tool_input):
-        current = kernel.node_source(sid, node["node_id"])
+        try:  # the tool edits the file as it is now, which `sync` may have refused to adopt
+            current = _okf.decode_source((root / node["path"]).read_bytes()).replace("\r\n", "\n")
+        except (OSError, UnicodeError):
+            current = kernel.node_source(sid, node["node_id"])
         staged = _stage_edit(tool, tool_input, current)
         if staged is not None:
-            verdict = kernel.commit(sid, node["node_id"], source=staged)
+            verdict = kernel.commit(sid, node["node_id"], source=staged, dry_run=True)
             if not verdict.accepted:
                 return _deny(
                     f"StepCheck Gate {verdict.gate}: {verdict.error}. "
@@ -208,6 +220,7 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
     dirty: dict[str, list[str]] = {}
     for sid, _root in candidates:
         try:
+            kernel.sync(sid)  # adopt the turn's last writes before judging it
             nodes = kernel.omission_report(sid)["dirty"]
         except KeyError:
             continue

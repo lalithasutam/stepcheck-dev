@@ -150,6 +150,25 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
 _CALL_RE = re.compile(r"^call:(.+?)\s+raises\s+([A-Za-z_][\w.]*)\s*$")
 
 
+def _call_equals(inv: str) -> tuple[str, object] | None:
+    """`call:<call expr> == <literal>` → (call expr, expected value), else None.
+    The form `_okf.mine_branch_invariants` synthesizes; hand-written ones work too."""
+    if not inv.startswith("call:"):
+        return None
+    try:
+        node = ast.parse(inv[len("call:"):], mode="eval").body
+    except SyntaxError:
+        return None
+    if not (isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq)
+            and isinstance(node.left, ast.Call)):
+        return None
+    try:
+        expected = ast.literal_eval(node.comparators[0])
+    except ValueError:
+        return None
+    return ast.unparse(node.left), expected
+
+
 def _fill_new_required(expr: str, tree: ast.Module) -> str:
     """Add typed mocks for required parameters of a mined `fn(...)` call that the
     staged signature gained, so the guard is exercised instead of a TypeError."""
@@ -274,7 +293,10 @@ def gate_c(
       ast, raises(fn, ExcName) — helpers; an awaitable result is run to
              completion, so `async def` functions are checked like sync ones.
     Sugar: `call:<expr> raises <Exc>` ≡ `raises(lambda: <expr>, "<Exc>")`
-    with `<expr>` evaluated inside `ns`. Auto-mined `call:` invariants also get
+    with `<expr>` evaluated inside `ns`; `call:<call> == <literal>` holds when the
+    call, evaluated inside `ns`, returns a value of the literal's type equal to
+    it (the deterministic-branch form `_okf.mine_branch_invariants` synthesizes).
+    Auto-mined `call:` invariants also get
     typed mocks for any required parameters the staged signature added.
     Budgets: loading the module runs under the wall clock only
     (`_sandbox.IMPORT_WALL_BUDGET_SECONDS`) — real packages execute far more
@@ -326,9 +348,23 @@ def gate_c(
             )
 
     for inv in invariants:
+        got: list = []
         try:
             m = _CALL_RE.match(inv)
-            if m:
+            eq = None if m else _call_equals(inv)
+            if eq is not None:
+                expr, expected = eq
+                if mined and inv in mined:
+                    expr = _fill_new_required(expr, tree)
+                code = compile(expr, "<okf-invariant>", "eval")
+
+                def check(code=code, expected=expected) -> bool:
+                    value = _complete(eval(code, dict(ns or {})))  # noqa: S307
+                    got.append(value)
+                    return type(value) is type(expected) and value == expected
+
+                ok = _sandbox.guarded(check)
+            elif m:
                 expr, exc_name = m.group(1), m.group(2)
                 if mined and inv in mined:
                     expr = _fill_new_required(expr, tree)
@@ -366,6 +402,12 @@ def gate_c(
                 f"invariant {inv!r} of '{node_id}' raised during evaluation: {exc!r}"
             )
         if not ok:
+            if got:
+                tag = " (auto-mined deterministic branch)" if mined and inv in mined else ""
+                raise LogicalError(
+                    f"staged diff violates frame invariant {inv!r} of '{node_id}'{tag}: "
+                    f"the call now returns {got[0]!r}"
+                )
             tag = " (auto-mined from a leading guard clause)" if mined and inv in mined else ""
             raise LogicalError(
                 f"staged diff violates frame invariant {inv!r} of '{node_id}'{tag}"

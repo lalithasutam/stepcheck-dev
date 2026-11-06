@@ -162,6 +162,9 @@ class _Session:
     # Not persisted either: assembled checkout payloads per (node, focus),
     # cleared by every mutating call (see StateKernel._flush).
     payload_cache: dict = field(default_factory=dict)
+    # Not persisted: node -> sha256 of on-disk bytes `sync` already refused, so
+    # the same bad bytes are judged (and counted) once, not on every hook call.
+    sync_refused: dict = field(default_factory=dict)
 
 
 class StateKernel:
@@ -263,9 +266,16 @@ class StateKernel:
         patch: list[dict] | None = None,
         allow_deletion: bool = False,
         at: float | None = None,
+        dry_run: bool = False,
     ) -> CommitVerdict:
         """Stage either a full `source` or a `patch` of AST-level ops folded into
-        the node's canonical state, then run Gates A → B → C."""
+        the node's canonical state, then run Gates A → B → C.
+
+        `dry_run=True` is the pre-write check a lifecycle hook makes before the
+        agent's own tool writes the file: the same gates, nothing landed and no
+        node state changed; an accepted verdict carries no attestation (the bytes
+        are attested when `sync` adopts them). A rejection is still counted and
+        logged — the omission was blocked."""
         s, node = self._get(session_id, node_id)
         if (source is None) == (patch is None):
             raise ValueError("commit() takes exactly one of source= or patch=")
@@ -273,7 +283,7 @@ class StateKernel:
             try:
                 source = _okf.apply_patch(node.info.source, patch)
             except ValueError as exc:
-                return self._reject(s, node, "A", MechanicalError(f"patch cannot fold: {exc}"))
+                return self._reject(s, node, "A", MechanicalError(f"patch cannot fold: {exc}"), dry_run=dry_run)
             sent_tokens = _tokens.count(json.dumps(patch, separators=(",", ":")))
         else:
             sent_tokens = _tokens.count(source)
@@ -282,13 +292,13 @@ class StateKernel:
         try:
             _gates.gate_a(node_id, node.locked, source, s.nodes)
         except MechanicalError as exc:
-            return self._reject(s, node, "A", exc)
+            return self._reject(s, node, "A", exc, dry_run=dry_run)
 
         staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s))
         try:
             _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion)
         except OmissionError as exc:
-            return self._reject(s, node, "B", exc)
+            return self._reject(s, node, "B", exc, dry_run=dry_run)
 
         # Hand-written invariants always apply; auto-mined guards are waived by a
         # declared deletion (the agent said it meant to remove behaviour).
@@ -307,8 +317,10 @@ class StateKernel:
                 project_paths={nid: n.info.path for nid, n in s.nodes.items()},
             )
         except LogicalError as exc:
-            return self._reject(s, node, "C", exc)
+            return self._reject(s, node, "C", exc, dry_run=dry_run)
 
+        if dry_run:
+            return CommitVerdict(accepted=True, gate=None, error=None, attestation=None, dirtied=[])
         try:
             digest = self._land(s, node, source)
         except MechanicalError as exc:
@@ -513,6 +525,41 @@ class StateKernel:
         """The canonical source of one node — what a commit folds patches into."""
         return self._get(session_id, node_id)[1].info.source
 
+    def sync(self, session_id: str, node_id: str | None = None) -> dict:
+        """Adopt what an agent's own tools wrote to tracked files — after a
+        `dry_run` approval, or any change made behind the session (git, a
+        formatter): every file (or just `node_id`'s) whose bytes differ from what
+        the session last saw is committed through Gates A -> B -> C exactly as it
+        stands on disk, attested and propagated like any commit. Returns
+        `{"synced": [node ids], "rejected": {node id: "<gate>: <reason>"}}`; a
+        rejected node keeps its canonical source, turns REJECTED and its bytes
+        are left alone (judged once per distinct content). Unreadable, deleted
+        or undecodable files are skipped."""
+        s = self._session(session_id)
+        synced: list[str] = []
+        rejected: dict[str, str] = {}
+        for nid in ([node_id] if node_id is not None else sorted(s.nodes)):
+            node = s.nodes[nid]
+            try:
+                raw = (s.root / node.info.path).read_bytes()
+                text = _okf.decode_source(raw).replace("\r\n", "\n")
+            except (OSError, UnicodeError):
+                continue
+            digest = _sha256(raw)
+            if digest == node.disk_sha256 or s.sync_refused.get(nid) == digest:
+                continue
+            if text == node.info.source:  # line endings / encoding only
+                node.disk_sha256 = digest
+                continue
+            verdict = self.commit(session_id, nid, source=text)
+            if verdict.accepted:
+                synced.append(nid)
+                s.sync_refused.pop(nid, None)
+            else:
+                rejected[nid] = f"{verdict.gate}: {verdict.error}"
+                s.sync_refused[nid] = digest
+        return {"synced": synced, "rejected": rejected}
+
     def omission_report(self, session_id: str) -> dict:
         """`{"dirty": [node ids in DIRTY_OMISSION_RISK], "can_finalize": bool}` —
         what `check_omission_risks` and the Stop hook ask, without the graph."""
@@ -520,13 +567,13 @@ class StateKernel:
         dirty = sorted(nid for nid, n in s.nodes.items() if n.status == DIRTY)
         return {"dirty": dirty, "can_finalize": not dirty}
 
-    def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError) -> CommitVerdict:
-        if not node.locked:
+    def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError, *, dry_run: bool = False) -> CommitVerdict:
+        if not node.locked and not dry_run:
             node.status = REJECTED
         if gate in ("B", "C"):
             s.omissions_blocked += 1
         s.events.append({"kind": "reject", "node_id": node.info.node_id, "gate": gate})
-        if node.locked:
+        if node.locked or dry_run:
             # Gate A on a locked node changes no frame and invalidates no checkout:
             # keep the event on the record without re-rendering the project or
             # dropping the payload memo (the Edit hook probes this path per call).
@@ -545,12 +592,15 @@ class StateKernel:
         path = s.root / node.info.path
         try:
             existing = path.read_bytes()
-            if _sha256(existing) != node.disk_sha256:
+            data = _okf.encode_like(source, existing)
+            # A file that changed behind the session is refused — unless it already
+            # holds exactly the staged bytes (an agent's tool wrote what a dry-run
+            # approved, and `sync` is adopting it).
+            if _sha256(existing) != node.disk_sha256 and data != existing:
                 raise MechanicalError(
                     f"'{node.info.path}' changed on disk since the session last read it "
                     f"— open a new session to pick up those edits"
                 )
-            data = _okf.encode_like(source, existing)
             if self._ephemeral:
                 return _sha256(data)
             if data != existing:

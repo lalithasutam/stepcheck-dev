@@ -107,7 +107,10 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
             preserved.append(sym)
 
     manual = harvest_invariants(source)
-    mined = [inv for inv in mine_guard_invariants(tree) if inv not in manual]
+    mined = []
+    for inv in mine_guard_invariants(tree) + mine_branch_invariants(tree):
+        if inv not in manual and inv not in mined:
+            mined.append(inv)
     invariants = manual + mined
 
     return ModuleInfo(
@@ -169,12 +172,17 @@ def frame_markdown(
     else:
         meta["verified"] = verified
     scoped = ""
+    callees: list[str] = []
+    over_budget: list[str] = []
+    if tree is not None and focus:
+        callees, over_budget = callee_closure(tree, focus, info.source)
     if compact_meta and fold_history:
         referenced: set[str] = set()
+        effective = list(focus or []) + callees
         if tree is not None and focus:
-            for f in focus:
+            for f in effective:
                 referenced |= _names_in(_resolve_symbol(tree, f)[1])
-        meta = _compact_meta(meta, focus or [], referenced)
+        meta = _compact_meta(meta, effective, referenced)
         scoped = " Frontmatter scoped to the focus (counts stand in for the rest; all still enforced)."
     fm = yaml.safe_dump(meta, sort_keys=False, default_flow_style=False)
     if focus is None:
@@ -195,6 +203,11 @@ def frame_markdown(
             if focus
             else " Pure skeleton; commit a `patch` to fold edits in."
         )
+        if callees:
+            note += f" Same-file callees of the focus, expanded verbatim: {', '.join(callees)}."
+        if over_budget:
+            note += (f" Callees kept as signatures (over the {CALLEE_TOKEN_BUDGET:,}-token callee budget;"
+                     f" add them to focus to see them): {', '.join(over_budget)}.")
     body = (
         f"# {info.node_id}\n\n"
         f"Compacted OKF frame for `{info.path}` — "
@@ -386,6 +399,8 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
         if _mod is not None:
             return _mod.skeleton(source, focus)
         tree = ast.parse(source)
+    if focus:
+        focus = list(focus) + callee_closure(tree, focus, source)[0]
     lines = source.splitlines(keepends=True)
     keep = {f for f in focus if "." not in f}
     members: dict[str, set[str]] = {}
@@ -733,6 +748,232 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
     return out
 
 
+# ------------------------------------- deterministic branch invariant mining
+
+_SAMPLES = {"str": "x", "int": 100, "float": 2.5, "bool": True}
+_PURE_BUILTINS = frozenset({
+    "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "frozenset", "int",
+    "isinstance", "len", "list", "max", "min", "range", "repr", "reversed", "round", "set",
+    "sorted", "str", "sum", "tuple", "zip", "True", "False", "None",
+})
+
+
+def _exception_builtins() -> frozenset[str]:
+    import builtins
+
+    return frozenset(
+        n for n in dir(builtins)
+        if isinstance(getattr(builtins, n), type) and issubclass(getattr(builtins, n), BaseException)
+    )
+
+
+def _plain_literal(value) -> bool:
+    """A value whose repr is a Python literal that evaluates back to it."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return True
+    if isinstance(value, float):
+        return value == value and value not in (float("inf"), float("-inf"))
+    if isinstance(value, (list, tuple)):
+        return all(_plain_literal(v) for v in value)
+    if isinstance(value, dict):
+        return all(_plain_literal(k) and _plain_literal(v) for k, v in value.items())
+    return False
+
+
+def _branch_facts(fn: ast.FunctionDef, params: set[str]) -> list[tuple[str, object]]:
+    """(param, literal) pairs from the function's leading branch prefix: each
+    `if <param> == <literal>: return …` or `if <param> in (<literal>, …): return …`.
+    The prefix is the run of single-statement `if … : return/raise` blocks at the
+    top of the body; the first other statement ends it (past it, state the
+    miner cannot see may decide the branch)."""
+    body = fn.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+        body = body[1:]
+    facts: list[tuple[str, object]] = []
+    for stmt in body:
+        if not (isinstance(stmt, ast.If) and not stmt.orelse and len(stmt.body) == 1
+                and isinstance(stmt.body[0], (ast.Return, ast.Raise))):
+            break
+        test = stmt.test
+        if not (isinstance(stmt.body[0], ast.Return) and isinstance(test, ast.Compare) and len(test.ops) == 1
+                and isinstance(test.left, ast.Name) and test.left.id in params):
+            continue
+        op, right = test.ops[0], test.comparators[0]
+        if isinstance(op, ast.Eq):
+            candidates = [right]
+        elif isinstance(op, ast.In) and isinstance(right, (ast.Tuple, ast.List, ast.Set)):
+            candidates = list(right.elts)
+        else:
+            continue
+        for lit in candidates:
+            try:
+                value = ast.literal_eval(lit)
+            except ValueError:
+                continue
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                fact = (test.left.id, value)
+                if fact not in facts:
+                    facts.append(fact)
+    return facts
+
+
+def _same_file_calls(fn: ast.FunctionDef, funcs: set[str]) -> set[str]:
+    return {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in funcs}
+
+
+def _is_pure(fn: ast.FunctionDef, allowed: set[str]) -> bool:
+    """Statically self-contained: no decorators, no async / generators, no
+    imports or global / nonlocal rebinding, and every name it reads is a
+    parameter, a local, or in `allowed` (same-file pure functions, literal
+    module constants, side-effect-free builtins and exception types)."""
+    if fn.decorator_list or isinstance(fn, ast.AsyncFunctionDef):
+        return False
+    local: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await, ast.Global, ast.Nonlocal,
+                             ast.Import, ast.ImportFrom)):
+            return False
+        if isinstance(node, ast.arg):
+            local.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            local.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not fn:
+            local.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            local.add(node.name)
+    # Annotations are never evaluated (the closure is compiled with
+    # `from __future__ import annotations`), so the names they mention do not count.
+    hints = [fn.returns] + [p.annotation for p in ast.walk(fn) if isinstance(p, ast.arg)]
+    hints += [n.annotation for n in ast.walk(fn) if isinstance(n, ast.AnnAssign)]
+    skip = {id(n) for h in hints if h is not None for n in ast.walk(h)}
+    reads = {n.id for n in ast.walk(fn)
+             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and id(n) not in skip}
+    return reads <= (local | allowed)
+
+
+def mine_branch_invariants(tree: ast.Module) -> list[str]:
+    """Characterize deterministic value-returning branches as executable
+    invariants `call:fn(param=<literal>, …) == <result>`.
+
+    For every top-level function whose leading prefix branches on a parameter
+    against a literal (`_branch_facts`), the function itself and every
+    same-file function that reaches it through direct calls and takes a
+    parameter of the same name are called with that literal (other required
+    parameters get typed samples) — but only when the whole call closure is
+    statically pure (`_is_pure`) — and the result, if it is a plain literal and
+    the same on a second run, becomes the expected value. Execution happens in
+    a namespace holding just the closure's defs, the module's literal
+    constants and a builtin allowlist, under the Gate C step budget; anything
+    that raises, overruns or returns a non-literal is skipped."""
+    from . import _sandbox
+
+    fns = {s.name: s for s in tree.body if isinstance(s, ast.FunctionDef)}
+    if not fns:
+        return []
+    facts = {name: _branch_facts(fn, {a.arg for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs})
+             for name, fn in fns.items()}
+    if not any(facts.values()):
+        return []
+
+    constants: dict[str, object] = {}
+    for stmt in tree.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            try:
+                value = ast.literal_eval(stmt.value)
+            except ValueError:
+                constants.pop(stmt.targets[0].id, None)
+                continue
+            if _plain_literal(value):
+                constants[stmt.targets[0].id] = value
+    calls = {name: _same_file_calls(fn, set(fns)) for name, fn in fns.items()}
+
+    def closure(name: str) -> set[str]:
+        seen, stack = {name}, [name]
+        while stack:
+            for callee in calls[stack.pop()]:
+                if callee not in seen:
+                    seen.add(callee)
+                    stack.append(callee)
+        return seen
+
+    exceptions = _exception_builtins()
+    pure: dict[str, bool] = {}
+    for name in fns:
+        allowed = set(fns) | set(constants) | _PURE_BUILTINS | exceptions
+        pure[name] = _is_pure(fns[name], allowed)
+
+    targets: list[tuple[str, str, object]] = []
+    for helper, pairs in facts.items():
+        for param, value in pairs:
+            for name, fn in fns.items():
+                a = fn.args
+                takes = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
+                if (name == helper or helper in closure(name)) and param in takes:
+                    if (name, param, value) not in targets:
+                        targets.append((name, param, value))
+    if not targets:
+        return []
+
+    import builtins
+    import __future__
+
+    out: list[str] = []
+    for name, param, value in targets:
+        group = closure(name)
+        if not all(pure[g] for g in group):
+            continue
+        a = fns[name].args
+        positional = a.posonlyargs + a.args
+        required = {p.arg for p in positional[: len(positional) - len(a.defaults)]}
+        required |= {p.arg for p, d in zip(a.kwonlyargs, a.kw_defaults) if d is None}
+        pos_args: list[object] = []
+        kw_args: dict[str, object] = {}
+        ok = True
+        for p in positional + a.kwonlyargs:
+            if p.arg == param:
+                v = value
+            elif p.arg in required:
+                sample = _annotation_name(p)
+                if sample not in _SAMPLES:
+                    ok = False
+                    break
+                v = _SAMPLES[sample]
+            else:
+                continue
+            if p in a.posonlyargs:
+                pos_args.append(v)
+            else:
+                kw_args[p.arg] = v
+        if not ok:
+            continue
+        module = ast.Module(body=[fns[g] for g in fns if g in group], type_ignores=[])
+        try:
+            code = compile(ast.unparse(module), "<okf-branch>", "exec",
+                           flags=__future__.annotations.compiler_flag, dont_inherit=True)
+            ns: dict = {"__builtins__": {n: getattr(builtins, n) for n in (_PURE_BUILTINS | exceptions)
+                                         if hasattr(builtins, n)}, **constants}
+            results = []
+            for _ in range(2):
+                run = dict(ns)
+                exec(code, run)  # noqa: S102 — defs only; the closure is statically pure
+                results.append(_sandbox.guarded(lambda run=run: run[name](*pos_args, **kw_args)))
+        except (Exception, _sandbox.ExecutionBudgetExceeded):  # noqa: BLE001 — not characterizable
+            continue
+        result = results[0]
+        if not (_plain_literal(result) and results[1] == result):
+            continue
+        try:
+            if ast.literal_eval(repr(result)) != result:
+                continue
+        except (ValueError, SyntaxError):
+            continue
+        args = [repr(v) for v in pos_args] + [f"{k}={v!r}" for k, v in kw_args.items()]
+        inv = f"call:{name}({', '.join(args)}) == {result!r}"
+        if inv not in out:
+            out.append(inv)
+    return out
+
+
 # ------------------------------------------------ package-aware import graph
 
 
@@ -925,6 +1166,82 @@ def _names_in(nodes) -> set[str]:
             elif isinstance(n, ast.Attribute):
                 out.add(n.attr)
     return out
+
+
+CALLEE_TOKEN_BUDGET = 1000  # verbatim same-file callee bodies a focused checkout may add
+
+
+def callee_closure(tree: ast.Module, focus: list[str], source: str | None = None,
+                   budget: int = CALLEE_TOKEN_BUDGET) -> tuple[list[str], list[str]]:
+    """Same-file functions and methods the focused symbols call, transitively:
+    `name(...)` resolves to a top-level def; `self.m(...)` / `cls.m(...)` to a
+    method of the class the calling method lives in; `Class.m(...)` to that
+    class's method. Receivers the AST cannot pin down (`cart.total()`) are not
+    guessed. Breadth-first from the focus, so the nearest helpers come first,
+    and within one call depth the smallest first (small helpers are where
+    business rules hide; the budget buys the most of them); a visited set
+    makes recursion and call cycles terminate. With `source`, callees whose
+    bodies would push the total past `budget` tokens are left out (and not
+    followed) — returned second so the frame can name them.
+    Returns (expanded, over_budget), both sorted."""
+    import heapq
+
+    from . import _tokens
+
+    funcs = {s.name for s in tree.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    methods = {
+        s.name: {m.name for m in s.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for s in tree.body if isinstance(s, ast.ClassDef)
+    }
+    lines = source.splitlines(keepends=True) if source is not None else None
+
+    def cost_of(group: list[ast.stmt]) -> int:
+        if lines is None:
+            return 0
+        start, end = _group_span(lines, group)
+        return _tokens.count("".join(lines[start - 1:end]))
+
+    focus_set = set(focus)
+    covered = {f for f in focus if "." not in f}  # a focused class already shows every method
+    seen: set[str] = set(focus)
+    heap: list[tuple[int, int, str]] = [(0, 0, f) for f in focus]
+    heapq.heapify(heap)
+    expanded: list[str] = []
+    skipped: list[str] = []
+    spent = 0
+    while heap:
+        depth, cost, sym = heapq.heappop(heap)
+        _body, group = _resolve_symbol(tree, sym)
+        if not group:
+            continue
+        if sym not in focus_set:
+            if lines is not None and spent + cost > budget:
+                skipped.append(sym)
+                continue
+            spent += cost
+            expanded.append(sym)
+        owner_default = sym.split(".")[0] if "." in sym else None
+        for node in group:
+            owner = node.name if isinstance(node, ast.ClassDef) else owner_default
+            for call in ast.walk(node):
+                if not isinstance(call, ast.Call):
+                    continue
+                fn = call.func
+                target = None
+                if isinstance(fn, ast.Name) and fn.id in funcs:
+                    target = fn.id
+                elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+                    recv = fn.value.id
+                    cls = owner if recv in ("self", "cls") else recv
+                    if cls in methods and fn.attr in methods[cls] and (recv in ("self", "cls") or recv in methods):
+                        target = f"{cls}.{fn.attr}"
+                if target is None or target in seen or target.split(".")[0] in covered:
+                    continue
+                seen.add(target)
+                callee_group = _resolve_symbol(tree, target)[1]
+                if callee_group:
+                    heapq.heappush(heap, (depth + 1, cost_of(callee_group), target))
+    return sorted(expanded), sorted(skipped)
 
 
 def _class_stub(node: ast.ClassDef) -> str:

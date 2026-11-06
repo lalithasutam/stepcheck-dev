@@ -106,3 +106,4 @@ def kernel():
 def _isolated_stepcheck_home(tmp_path, monkeypatch):
     """Keep the session registry out of the developer's real ~/.stepcheck."""
     monkeypatch.setenv("STEPCHECK_HOME", str(tmp_path / ".stepcheck-home"))
+    monkeypatch.setenv("STEPCHECK_HOOK_AUTOSTART", "0")  # hook subprocesses never spawn gateways unless a test asks

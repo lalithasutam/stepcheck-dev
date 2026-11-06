@@ -8,7 +8,10 @@ Three bands over the non-system conversation a client proxies through Door 1:
             AST skeleton (signatures, decorators, docstrings; bodies elided);
   oldest  — when the gap since the previous turn exceeds CACHE_CLIFF_SECONDS the
             cached prefix is gone anyway, so the middle band is folded into one
-            compact OKF session-state frame supplied by the gateway.
+            compact OKF session-state frame supplied by the gateway; the
+            natural-language constraints users stated in those turns are
+            pinned into the frame verbatim (`pinned_constraints`), while their
+            tool output, file dumps and stack traces go.
 
 Dead-end turns are pruned from every band: an assistant message that carries no
 step (the gateway decides what a step is) or any message carrying
@@ -197,6 +200,68 @@ def default_is_step(message: dict) -> bool:
     return "```python" in text or "```stepcheck-patch" in text
 
 
+PIN_SHORT_TOKENS = 60    # a user turn this short with no code or log in it is an instruction: kept whole
+PIN_MAX_TOKENS = 400     # a longer prose turn carrying constraint keywords is kept whole up to this size…
+PIN_LINE_TOKENS = 120    # …beyond it only its keyword lines are, each up to this size
+_CONSTRAINT_RE = re.compile(
+    r"\b(?:must(?:\s+not)?|never|always|critical|rule|invariant|constraint|required?|requirement|"
+    r"mandatory|forbidden|do\s+not|don'?t|important|guarantee)\b",
+    re.I,
+)
+
+
+def _user_prose(message: dict) -> str:
+    """The text a user typed in one message: string content or text blocks, never
+    tool_result blocks (tool output, not instructions), with fenced blocks removed."""
+    if message.get("role") != "user":
+        return ""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        parts = [content]
+    else:
+        parts = [b["text"] for b in content
+                 if isinstance(b, dict) and b.get("type", "text") == "text" and isinstance(b.get("text"), str)]
+    return _FENCE_RE.sub("", "\n".join(parts)).strip()
+
+
+def _looks_like_code(text: str) -> bool:
+    """Source by its own syntax (column-0 def / class / import, TS, Go, Rust, Java
+    declarations), not by a file-name hint: "timestamps in events.py are ms" is
+    prose that mentions a path."""
+    return any(rx.search(text) for rx in (_PY_PREFILTER_RE, _TS_SYNTAX_RE, _GO_SYNTAX_RE,
+                                          _RUST_SYNTAX_RE, _JAVA_SYNTAX_RE))
+
+
+def pinned_constraints(messages: list[dict]) -> list[str]:
+    """Natural-language user constraints in `messages`, verbatim and in order:
+    a short instruction (≤ PIN_SHORT_TOKENS) is kept whole; a longer prose turn
+    with constraint keywords whole up to PIN_MAX_TOKENS, else only its keyword
+    lines. Pasted code, line-numbered reads and logs (Traceback / FAIL / ERROR
+    lines) never pin: they are what the fold exists to drop."""
+    out: list[str] = []
+    for m in messages:
+        prose = _user_prose(m)
+        if not prose or DEAD_END_MARKER in prose:
+            continue
+        body, numbered = strip_line_numbers(prose)
+        if numbered or _looks_like_code(body):
+            continue
+        tokens = _tokens.count(prose)
+        keyed = bool(_CONSTRAINT_RE.search(prose))
+        logish = bool(_LOG_KEEP_RE.search(prose))
+        if not logish and (tokens <= PIN_SHORT_TOKENS or (keyed and tokens <= PIN_MAX_TOKENS)):
+            pick = [prose]
+        elif keyed:
+            pick = [ln.strip() for ln in prose.splitlines()
+                    if _CONSTRAINT_RE.search(ln) and not _LOG_KEEP_RE.search(ln) and _tokens.count(ln) <= PIN_LINE_TOKENS]
+        else:
+            pick = []
+        for text in pick:
+            if text and text not in out:
+                out.append(text)
+    return out
+
+
 @dataclass
 class Compaction:
     messages: list[dict]
@@ -212,6 +277,7 @@ class Compaction:
     prefixes_stripped: int = 0
     languages: dict[str, int] = field(default_factory=dict)
     elapsed_ms: float = 0.0
+    pinned: int = 0
 
     @property
     def saved_pct(self) -> float:
@@ -224,6 +290,7 @@ class Compaction:
             "tokens_before": self.tokens_before, "tokens_after": self.tokens_after, "saved_pct": round(self.saved_pct, 1),
             "blocks_skeletonized": self.skeletonized, "logs_elided": self.logs_elided,
             "line_prefixes_stripped": self.prefixes_stripped, "languages": dict(self.languages),
+            "pinned_constraints": self.pinned,
             "elapsed_ms": round(self.elapsed_ms, 3),
         }
 
@@ -262,9 +329,14 @@ class ContextCompactor:
         folded = 0
         stats = _stats(None)
         log_t = LOG_TOKEN_THRESHOLD if self.log_threshold is None else self.log_threshold
+        pinned: list[str] = []
         if cliff and middle and summary is not None:
             text = summary() if callable(summary) else summary
             folded = len(middle)
+            pinned = pinned_constraints(middle)
+            if pinned:
+                text = (text.rstrip("\n") + "\n\n## User constraints pinned from the folded turns (verbatim)\n\n"
+                        + "\n\n".join(pinned) + "\n")
             middle_out = [{"role": "user", "content": text}]
         else:
             middle_out = [_compact_message_with(m, self.threshold, log_t, stats) for m in middle]
@@ -275,7 +347,8 @@ class ContextCompactor:
         result = Compaction(messages=out, pruned=pruned, folded=folded, cache_cliff=cliff, gap_seconds=gap,
                             tokens_before=before, tokens_after=middle_after + recent_tokens,
                             skeletonized=stats["skeletonized"], logs_elided=stats["logs_elided"],
-                            prefixes_stripped=stats["prefixes_stripped"], languages=stats["languages"])
+                            prefixes_stripped=stats["prefixes_stripped"], languages=stats["languages"],
+                            pinned=len(pinned))
         result.bands = {
             "recent": {"messages": len(recent), "tokens_before": recent_tokens, "tokens_after": recent_tokens},
             "middle": {"messages_in": len(middle), "messages_out": len(middle_out), "tokens_before": middle_before,
@@ -284,6 +357,17 @@ class ContextCompactor:
         }
         result.elapsed_ms = (time.perf_counter() - started) * 1000
         return result
+
+
+def compact(messages: list[dict], *, keep_recent: int = RECENT_BAND, code_token_threshold: int = CODE_TOKEN_THRESHOLD,
+            cache_cliff_seconds: float = CACHE_CLIFF_SECONDS, log_token_threshold: int | None = None,
+            **kwargs) -> Compaction:
+    """Module-level form of `ContextCompactor(...).compact(messages, ...)`: the
+    constructor options as keywords, everything else (`is_step`, `now`,
+    `last_turn_at`, `summary`) passed through."""
+    return ContextCompactor(keep_recent=keep_recent, code_token_threshold=code_token_threshold,
+                            cache_cliff_seconds=cache_cliff_seconds,
+                            log_token_threshold=log_token_threshold).compact(messages, **kwargs)
 
 
 import functools
