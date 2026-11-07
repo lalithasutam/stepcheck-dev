@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
+            "command": "python -S \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
+            "command": "python -S \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -S \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
             "timeout": 10
           }
         ]

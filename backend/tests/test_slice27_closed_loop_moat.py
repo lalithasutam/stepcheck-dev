@@ -364,13 +364,88 @@ def _dead_url() -> str:
     return f"http://127.0.0.1:{port}/v1/step/hook"  # nothing listens: connection refused
 
 
-def _run_hook(script: Path, event: dict, *, backend: Path | None = BACKEND, isolated: bool = False):
+def _run_hook(script: Path, event: dict, *, backend: Path | None = BACKEND, python: str = sys.executable):
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "STEPCHECK_BACKEND")}
     env.update(STEPCHECK_HOOK_URL=_dead_url(), PYTHONUTF8="1")
     if backend is not None:
         env["STEPCHECK_BACKEND"] = str(backend)
-    argv = [sys.executable, *(["-S"] if isolated else []), str(script)]
+    argv = [python, "-S", str(script)]  # as installed: `python -S`
     return subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_gate_b_rejects_a_rewrite_that_stubs_an_unfocused_body(kernel, billing_project):
+    sid = kernel.init_session(billing_project)
+    rendered = kernel.checkout(sid, "billing", focus=["charge"]).rendered()
+    copied = rendered.split("```python\n", 1)[1].split("```", 1)[0]  # the frame's code, refund elided to `...`
+    assert "def refund(user: str, amount: int) -> dict:\n    ...\n" in copied
+
+    verdict = kernel.commit(sid, "billing", source=copied)
+    assert not verdict.accepted and verdict.gate == "B"
+    assert ("symbol 'refund' body was replaced with skeleton stub '...' "
+            "(preserve original implementation or use patch replace_symbol)") in str(verdict.error)
+
+    for stub in ('    pass\n', '    """Refund."""\n'):  # `pass` and docstring-only bodies are stubs too
+        wiped = _replace_def(BILLING, "refund", "def refund(user: str, amount: int) -> dict:\n" + stub)
+        assert kernel.commit(sid, "billing", source=wiped).gate == "B"
+    patched = kernel.commit(sid, "billing", patch=[{"op": "replace_symbol", "name": "refund",
+                                                    "code": "def refund(user: str, amount: int) -> dict:\n    ...\n"}])
+    assert patched.gate == "B" and "'refund'" in str(patched.error)
+    assert (billing_project / "billing.py").read_text(encoding="utf-8") == BILLING
+
+    import server  # the native Write tool is held to the same rule (Seam 2)
+
+    with TestClient(server.app) as client:
+        out = client.post("/v1/step/hook", json={
+            "hook_event_name": "PreToolUse", "tool_name": "Write", "cwd": str(billing_project),
+            "tool_input": {"file_path": str(billing_project / "billing.py"), "content": copied}}).json()
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny" and "Gate B" in hso["permissionDecisionReason"]
+    assert "skeleton stub" in hso["permissionDecisionReason"]
+
+    # A real body change is fine, and allow_deletion still declares an intended stub.
+    assert kernel.commit(sid, "billing", patch=[{"op": "replace_symbol", "name": "refund", "code":
+                         "def refund(user: str, amount: int) -> dict:\n    return {'user': user, 'refunded': -amount}\n"}]).accepted
+    assert kernel.commit(sid, "billing", source=copied, allow_deletion=True).accepted
+
+
+def test_post_tool_use_adopts_the_written_file_so_ci_is_green_at_once(billing_project, capsys):
+    assert cli.main(["hooks", str(billing_project)]) == 0
+    settings = json.loads((billing_project / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    post = settings["hooks"]["PostToolUse"]
+    assert len(post) == 1 and {"Edit", "Write"} <= set(post[0]["matcher"].split("|"))
+    commands = {h["command"] for e in settings["hooks"].values() for m in e for h in m["hooks"]}
+    assert commands == {'python -S "$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py"'}
+    kernel = StateKernel()
+    sid = kernel.init_session(billing_project)
+    assert kernel.commit(sid, "billing", patch=[{"op": "append", "code": "def audit() -> int:\n    return 1\n"}]).accepted
+    target = billing_project / "billing.py"
+    written = target.read_text(encoding="utf-8").replace('"REFUND_BODY_MARKER"', '"REFUND_BODY_MARKER", "v": 2')
+    target.write_text(written, encoding="utf-8", newline="\n")  # the Edit tool wrote it
+    capsys.readouterr()
+    assert cli.main(["ci", str(billing_project)]) != 0  # drift until the session adopts the bytes
+
+    script = billing_project / ".claude" / "hooks" / "stepcheck_hook.py"
+    event = {"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": str(billing_project),
+             "tool_input": {"file_path": str(target)}, "tool_response": {"filePath": str(target)}}
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "STEPCHECK_BACKEND")}
+    env.update(STEPCHECK_HOOK_URL=_dead_url(), PYTHONUTF8="1", STEPCHECK_BACKEND=str(BACKEND))
+    done = subprocess.run([sys.executable, "-S", str(script)], input=json.dumps(event), capture_output=True,
+                          text=True, env=env, timeout=60)  # installed as `python -S`, gateway down: in-process
+    assert done.returncode == 0 and done.stdout == "", (done.stdout, done.stderr)
+    assert StateKernel().node_source(sid, "billing") == written
+    capsys.readouterr()
+    assert cli.main(["ci", str(billing_project)]) == 0
+
+    # Re-running `stepcheck hooks` over an older install migrates its command: no duplicates.
+    old = 'python "$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py"'
+    stale = {"hooks": {"PreToolUse": [{"matcher": "Read|Edit", "hooks": [{"type": "command", "command": old}]}],
+                       "Stop": [{"hooks": [{"type": "command", "command": old}, {"type": "command", "command": "echo bye"}]}]}}
+    (billing_project / ".claude" / "settings.json").write_text(json.dumps(stale), encoding="utf-8")
+    assert cli.main(["hooks", str(billing_project)]) == 0
+    migrated = json.loads((billing_project / ".claude" / "settings.json").read_text(encoding="utf-8"))["hooks"]
+    ours = [h["command"] for e in migrated.values() for m in e for h in m["hooks"] if "stepcheck_hook.py" in h["command"]]
+    assert sorted(ours) == sorted([commands.pop()] * 3)
+    assert any(h["command"] == "echo bye" for m in migrated["Stop"] for h in m["hooks"])
 
 
 def test_installed_hook_is_the_cli_template(tmp_path):
@@ -459,12 +534,15 @@ def test_gateway_down_hook_warms_a_detached_gateway(billing_project, capsys):
             os.kill(json.loads(state.read_text(encoding="utf-8"))["pid"], signal.SIGTERM)
 
 
-def test_gateway_down_hook_without_a_stepcheck_install_fails_open(billing_project, capsys):
+def test_gateway_down_hook_without_a_stepcheck_install_fails_open(billing_project, tmp_path, capsys):
     assert cli.main(["hooks", str(billing_project)]) == 0
     capsys.readouterr()
     script = billing_project / ".claude" / "hooks" / "stepcheck_hook.py"
     edit = {"hook_event_name": "PreToolUse", "tool_name": "Write", "cwd": str(billing_project),
             "tool_input": {"file_path": str(billing_project / "billing.py"), "content": "x = 1\n"}}
-    out = _run_hook(script, edit, backend=None, isolated=True)  # -S: no site-packages, no install found
+    bare = tmp_path / "bare-venv"  # an interpreter with nothing installed: no StepCheck anywhere
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(bare)], check=True, timeout=120)
+    python = bare / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    out = _run_hook(script, edit, backend=None, python=str(python))
     assert out.returncode == 0 and out.stdout == ""
     assert "allowing" in out.stderr

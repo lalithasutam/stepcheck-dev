@@ -17,14 +17,17 @@ Offline is detected with a short connect probe (STEPCHECK_HOOK_CONNECT_TIMEOUT,
 default 0.25 s). When the gateway URL is local and an install is found, the cold
 call also starts `stepcheck up` detached on that port (at most once a minute;
 pid in $STEPCHECK_HOME/gateway-<port>.json, output in gateway-<port>.log), so
-later calls are answered warm. STEPCHECK_HOOK_AUTOSTART=0 turns that off."""
+later calls are answered warm. STEPCHECK_HOOK_AUTOSTART=0 turns that off.
+
+The relay imports only the standard library and is installed as `python -S` (no
+site / .pth scan at start-up); the offline fallback runs site.main() itself
+before importing the kernel. PostToolUse on an editing tool adopts the written
+bytes into the session at once."""
 import json
 import os
 import socket
-import subprocess
 import sys
 import time
-import urllib.request
 from urllib.parse import urlsplit
 
 URL = os.environ.get("STEPCHECK_HOOK_URL", "http://127.0.0.1:8420/v1/step/hook")
@@ -39,13 +42,42 @@ def _endpoint():
     return parts.hostname or "127.0.0.1", parts.port or (443 if parts.scheme == "https" else 80)
 
 
-def _reachable() -> bool:
-    try:
-        timeout = float(os.environ.get("STEPCHECK_HOOK_CONNECT_TIMEOUT", "0.25"))
-        with socket.create_connection(_endpoint(), timeout=timeout):
-            return True
-    except (OSError, ValueError):
-        return False
+def _post(payload: bytes) -> bytes:
+    """POST the event to the gateway. Plain http goes over a raw socket (importing
+    urllib.request costs ~0.1 s per hook); the connect itself is the offline probe."""
+    parts = urlsplit(URL)
+    if parts.scheme != "http":
+        import urllib.request
+
+        req = urllib.request.Request(URL, data=payload, headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2"))) as r:
+            return r.read()
+    host, port = _endpoint()
+    path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    with socket.create_connection((host, port), timeout=float(os.environ.get("STEPCHECK_HOOK_CONNECT_TIMEOUT", "0.25"))) as s:
+        s.settimeout(float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2")))
+        s.sendall((f"POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n"
+                   f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n").encode("ascii") + payload)
+        chunks = []
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0]
+    if status_line.split(b" ", 2)[1:2] != [b"200"]:
+        raise OSError(f"gateway answered {status_line!r}")
+    if b"transfer-encoding: chunked" in head.lower():
+        out, rest = b"", body
+        while rest:
+            size_line, _, rest = rest.partition(b"\r\n")
+            size = int(size_line.split(b";")[0] or b"0", 16)
+            if size == 0:
+                break
+            out, rest = out + rest[:size], rest[size + 2:]
+        body = out
+    return body
 
 
 def _warm_gateway(backend) -> bool:
@@ -55,6 +87,8 @@ def _warm_gateway(backend) -> bool:
         return False
     home = os.environ.get("STEPCHECK_HOME") or os.path.join(os.path.expanduser("~"), ".stepcheck")
     try:
+        import subprocess
+
         os.makedirs(home, exist_ok=True)
         lock = os.path.join(home, f"gateway-{port}.lock")
         if os.path.exists(lock) and time.time() - os.path.getmtime(lock) < 60:
@@ -123,14 +157,13 @@ def main() -> int:
         return 0
     event.setdefault("cwd", os.getcwd())
     try:
-        if not _reachable():
-            raise ConnectionRefusedError("connect probe")
-        req = urllib.request.Request(URL, data=json.dumps(event).encode("utf-8"),
-                                     headers={"content-type": "application/json"})
-        with urllib.request.urlopen(req, timeout=float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2"))) as r:
-            out = json.loads(r.read() or b"{}")
+        out = json.loads(_post(json.dumps(event).encode("utf-8")) or b"{}")
     except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout
         offline = f"gateway offline ({exc.__class__.__name__})"
+        if sys.flags.no_site:  # installed as `python -S`: load site-packages only now, for the kernel
+            import site
+
+            site.main()
         backend = _backend_dir()
         hint = "warming it in the background" if _warm_gateway(backend) else "Run `stepcheck up`."
         if event.get("tool_name") == "Read":

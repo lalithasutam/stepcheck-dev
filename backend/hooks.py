@@ -31,6 +31,9 @@ Policy:
   session: bytes the agent's tools (or git, or a formatter) wrote are adopted
   through the gates, so the session never goes stale and dependents of a
   changed signature turn DIRTY_OMISSION_RISK.
+- PostToolUse Edit / Write / MultiEdit / NotebookEdit: `sync` the written
+  node at once (so `stepcheck ci` is green right after the edit); if the bytes
+  fail a gate, say so as additionalContext.
 - Stop: block while any module of the project's session holds
   DIRTY_OMISSION_RISK, naming them; stop_hook_active short-circuits.
 Everything else is allowed silently.
@@ -240,6 +243,35 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
     }
 
 
+def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
+    """Adopt the bytes an Edit / Write just wrote, through the gates, so the session
+    (and `stepcheck ci`) is current the moment the tool returns."""
+    if event.get("tool_name") not in EDIT_TOOLS:
+        return {}
+    tool_input = event.get("tool_input") or {}
+    file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if not file_path:
+        return {}
+    target = Path(str(file_path))
+    found = _session(event, target, kernel)
+    if found is None:
+        return {}
+    sid, root = found
+    node = _node_for(kernel, sid, root, target)
+    if node is None:
+        return {}
+    refused = kernel.sync(sid, node["node_id"])["rejected"].get(node["node_id"])
+    if not refused:
+        return {}
+    return {"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": (
+            f"StepCheck: the bytes just written to {node['path']} were NOT adopted by session {sid} "
+            f"(Gate {refused}). The file on disk now violates a gate; restore or fix it."
+        ),
+    }}
+
+
 def decide(event: dict, kernel: StateKernel) -> dict:
     """The hook answer for one lifecycle event, or {} for "no opinion"."""
     name = event.get("hook_event_name") or ("Stop" if "stop_hook_active" in event else "PreToolUse")
@@ -247,4 +279,6 @@ def decide(event: dict, kernel: StateKernel) -> dict:
         return _stop(event, kernel)
     if name == "PreToolUse":
         return _pre_tool_use(event, kernel)
+    if name == "PostToolUse":
+        return _post_tool_use(event, kernel)
     return {}

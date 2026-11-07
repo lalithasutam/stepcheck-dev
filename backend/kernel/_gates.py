@@ -67,8 +67,55 @@ def export_names(exports: list[str]) -> set[str]:
     return out
 
 
+def _stub_kind(body: list) -> str | None:
+    """'...' / 'pass' / 'docstring-only' when a def body is a skeleton stub, else None."""
+    stmts = body
+    if stmts and isinstance(stmts[0], ast.Expr) and isinstance(stmts[0].value, ast.Constant) \
+            and isinstance(stmts[0].value.value, str):
+        stmts = stmts[1:]
+    if not stmts:
+        return "docstring-only"
+    if len(stmts) == 1 and isinstance(stmts[0], ast.Pass):
+        return "pass"
+    if len(stmts) == 1 and isinstance(stmts[0], ast.Expr) and isinstance(stmts[0].value, ast.Constant) \
+            and stmts[0].value.value is Ellipsis:
+        return "..."
+    return None
+
+
+def _def_bodies(tree: ast.Module) -> dict[str, list]:
+    """Qualified name -> body for top-level defs and (nested) class methods."""
+    out: dict[str, list] = {}
+
+    def visit(stmts, prefix: str) -> None:
+        for s in stmts:
+            if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out[prefix + s.name] = s.body
+            elif isinstance(s, ast.ClassDef):
+                visit(s.body, f"{prefix}{s.name}.")
+
+    visit(tree.body, "")
+    return out
+
+
+def _stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[str, str]]:
+    """Defs whose real body the staged source turns into a skeleton stub — what a
+    whole-file write copied from an OKF frame (unfocused bodies shown as `...`)
+    does. Python modules only."""
+    if not str(path).endswith((".py", ".pyi")):
+        return []
+    try:
+        old, new = _def_bodies(ast.parse(old_source)), _def_bodies(ast.parse(new_source))
+    except SyntaxError:
+        return []
+    return [(name, kind) for name, body in old.items()
+            if name in new and _stub_kind(body) is None and (kind := _stub_kind(new[name])) is not None]
+
+
 def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool) -> None:
-    """Omission detection: symbol fingerprinting + mass-deletion guard.
+    """Omission detection: symbol fingerprinting, skeleton-stub body overwrites
+    (a def whose real body became `...` / `pass` / docstring-only), and the
+    mass-deletion guard.
 
     Raises kernel.OmissionError. `allow_deletion=True` declares the deletion
     and bypasses both checks (GLOSSARY: Gate B). When several fingerprints are
@@ -88,6 +135,15 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
             f"preserved symbol '{(named or dropped)[0]}' of '{node.info.node_id}' was silently "
             f"dropped from the staged source",
             subtype="INTRA_NODE_SYMBOL_DROPPED",
+        )
+
+    stubbed = _stubbed_bodies(node.info.path, old_source, new_source)
+    if stubbed:
+        name, stub = stubbed[0]
+        raise OmissionError(
+            f"symbol '{name}' body was replaced with skeleton stub '{stub}' "
+            f"(preserve original implementation or use patch replace_symbol)",
+            subtype="INTRA_NODE_BODY_STUBBED",
         )
 
     old_n = _okf.statement_count(old_source)
