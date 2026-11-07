@@ -196,6 +196,20 @@ def _lost_bindings(path: str, old_source: str, new_source: str) -> list[str] | N
     return sorted(old - new)
 
 
+def unchanged_since_lock(node, source: str) -> bool:
+    """Gate A's one exception to a lock: a commit to a LOCKED node that changes
+    nothing — the staged source is the canonical one and the bytes the session
+    last saw are the node's latest attestation (or, never attested since, the
+    bytes it was locked with). Such a commit re-verifies the node against
+    upstream changes (Gates B and C still run) instead of mutating it, so a
+    DIRTY_OMISSION_RISK mark can be cleared. A file changed behind the session
+    is still refused when the commit lands (`changed on disk since …`)."""
+    if source != node.info.source or not node.disk_sha256:
+        return False
+    attested = node.verified[-1]["payload"]["sha256"] if node.verified else node.disk_sha256
+    return node.disk_sha256 == attested
+
+
 def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     """Mechanical & locked protection. Returns the parsed tree on pass.
 
@@ -207,6 +221,8 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     """
     from . import _okf as _okf_, _ts
 
+    if locked and node_id in nodes and unchanged_since_lock(nodes[node_id], source):
+        locked = False  # re-verification of the locked bytes, not a mutation
     _path = next((n.info.path for nid, n in nodes.items() if nid == node_id), f"{node_id}.py")
     _mod = _okf_.lang_module(_path)
     if _mod is not None:

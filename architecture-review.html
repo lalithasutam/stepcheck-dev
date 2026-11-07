@@ -34,8 +34,8 @@
 <p><strong>Verdict: the deep-module bet holds, and the fold pays.</strong> One
 kernel behind one Python seam carries compilation, skeleton slicing, patch
 folding, three gates (now with semantic invariants), locking, attestation and
-telemetry in 6561 lines; everything HTTP-shaped lives behind the second
-seam (735 lines). 264 tests collected in 1.62s across the two seams, zero mocks of
+telemetry in 6698 lines; everything HTTP-shaped lives behind the second
+seam (747 lines). 272 tests collected in 1.72s across the two seams, zero mocks of
 internals, and all four events injected into the 50-turn benchmark were caught
 at the intended gate.</p>
 
@@ -45,7 +45,7 @@ at the intended gate.</p>
 <tr><td><code>StateKernel</code> (Seam 1)</td>
     <td>8 methods: init_session · checkout(focus=) · commit(source= | patch=) ·
         lock_node · finalize_session · get_telemetry · record_draft/drafts · graph</td>
-    <td>6561 LOC across <code>kernel/</code> (_okf, _gates, _sandbox,
+    <td>6698 LOC across <code>kernel/</code> (_okf, _gates, _sandbox,
         _telemetry, _tokens stay private); every kernel caveat from v1 and v2 is closed</td>
     <td class="ok">Deleting any private module breaks only the kernel — no caller
         imports them.</td></tr>
@@ -54,7 +54,7 @@ at the intended gate.</p>
         (BYOK or dry-run). Door 2: <code>/v1/step/*</code> ·
         Streamable&nbsp;HTTP MCP at <code>/mcp</code> ·
         <code>WS /v1/ws/{session_id}</code></td>
-    <td>735 LOC, stateless over the kernel</td>
+    <td>747 LOC, stateless over the kernel</td>
     <td class="ok">Gateway deletes cleanly: no kernel code knows HTTP exists.</td></tr>
 </table>
 

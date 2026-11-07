@@ -195,9 +195,10 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
             context,
         )
     if tool in EDIT_TOOLS and node["status"] == "LOCKED":
-        verdict = kernel.commit(sid, node["node_id"], source=kernel.node_source(sid, node["node_id"]),
-                                dry_run=True)  # Gate A speaks for itself
-        reason = str(verdict.error) if verdict.error else f"node '{node['node_id']}' is LOCKED"
+        # Any edit is a mutation, which Gate A rejects on a locked node. (A probe commit
+        # of the unchanged source no longer works for this: a byte-identical commit is
+        # the re-verification a locked node accepts.)
+        reason = f"node '{node['node_id']}' is LOCKED — mutations are rejected at Gate A"
         return _deny(f"StepCheck Gate A: {reason}. Unlock it or edit through the gates.")
     if tool in EDIT_TOOLS and _has_edit_payload(tool, tool_input):
         try:  # the tool edits the file as it is now, which `sync` may have refused to adopt

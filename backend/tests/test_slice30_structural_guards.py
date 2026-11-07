@@ -228,13 +228,18 @@ def test_concise_refactor_is_not_a_mass_deletion_but_dropped_bindings_still_are(
 
 
 def test_tiny_module_focus_gets_a_compact_header(kernel, tmp_path):
-    src = "def add(a, b):\n    if a is None:\n        raise ValueError('a')\n    return a + b\n"
+    # A partial focus on a tiny module: the full header would outweigh the file, so
+    # the frontmatter shrinks while the unfocused symbol stays a skeleton. (A focus
+    # that covers the whole module is the zero-inflation pragma: see slice 31.)
+    src = ("def add(a, b):\n    if a is None:\n        raise ValueError('a')\n    return a + b\n\n\n"
+           "def sub(a, b):\n    return a - b\n")
     _write(tmp_path, {"tiny.py": src})
     sid = kernel.init_session(tmp_path)
     p = kernel.checkout(sid, "tiny", focus=["add"])
     front = yaml.safe_load(p.frame_markdown.split("---\n")[1])
     assert set(front) <= {"node_id", "path", "status", "locked", "deps", "attestation"}
-    assert src in p.frame_markdown and "compact header" in p.frame_markdown
+    assert "compact header" in p.frame_markdown and "raise ValueError('a')" in p.frame_markdown
+    assert "def sub(a, b):" in p.frame_markdown and "return a - b" not in p.frame_markdown
     full = kernel.checkout(sid, "tiny")  # the unfocused frame keeps the full header
     assert p.token_count < full.token_count
     assert "guard:add:if a is None raises ValueError" in p.locked_invariants or any(

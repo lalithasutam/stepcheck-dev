@@ -202,7 +202,9 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
             continue
         for m in _IMPORT_SPEC.finditer(s.text):
             spec = m.group("spec")
-            alias = m.group("alias") or spec.rsplit("/", 1)[-1]
+            alias = m.group("alias")
+            if alias in (None, "import"):  # `import "x/pkg"`: the keyword is not an alias
+                alias = spec.rsplit("/", 1)[-1]
             dotted = spec.replace("/", ".")
             best_len = -1
             targets: list[str] = []

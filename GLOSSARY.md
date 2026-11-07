@@ -38,6 +38,11 @@ directory). A fresh `StateKernel` (a gateway restart) rehydrates a known `sessio
 an unknown or malformed id is a `KeyError` (404 at Seam 2). `StateKernel(ephemeral=True)` is
 verification-only: gates, attestations and the graph work in memory, but no frame, session file,
 registry entry or tracked-file write-back is ever written — this is what `stepcheck ci` runs on.
+**Session refresh:** `refresh_sessions()` reconciles memory with disk — a session whose file was
+archived or deleted is evicted (its next use is the `KeyError` of an unknown id), and one whose file
+another process rewrote (newer `mtime_ns`, bytes not this process's own last write) is reloaded.
+The gateway runs it before every `/v1/…` and `/mcp` request, so a long-lived daemon never answers
+the Stop hook from a session already archived on disk.
 
 **StateKernel** — The single deep module behind Seam 1. Owns OKF compilation, sessions,
 checkout/commit, the three gates, locking, attestation, and telemetry. Everything else in
@@ -53,7 +58,11 @@ keeps the append-only `verified[]` chain. **Compact header:** when a focused che
 covers every top-level symbol (the frame is the whole module, served verbatim) or the full header
 would outweigh the file, the frontmatter shrinks to `node_id, path, status, locked` (+ `deps`,
 `attestation` when non-empty); everything dropped is still enforced at the gates. Empty
-dependency / invariant sections are omitted from the payload.
+dependency / invariant sections are omitted from the payload. **Pragma bypass (zero inflation):**
+when the focus covers every symbol of the module and even the compact frame would cost more
+tokens than the raw source, the payload is one comment line — `# [stepcheck: <node_id> | <status>
+| invariants: N enforced]` (`//` outside Python) — followed by the source verbatim; `rendered()`
+returns exactly that. The overhead is that one line, never a frame.
 
 **Focus / AST skeleton** — `checkout(…, focus=[names])` serves the named top-level defs
 verbatim (comments included) and every other def/class as decorators + signature + docstring +
@@ -83,8 +92,11 @@ no signature changed or removed among the names it imports (`from m import a`), 
 public exports for a module import (`import m`) — is not dirtied: if it is clean and its on-disk
 bytes still hash to what the session last attested, Gates A/B/C run on it in memory against the
 new state and, on a pass, its attestation is refreshed (`CommitVerdict.reverified[]`). Purely
-additive changes therefore dirty nothing. TS / Go / Rust / Java dependencies are always dirtied
-on an export change.
+additive changes therefore dirty nothing. TS / Go / Rust / Java use the same per-name contract,
+read from the export signatures (`Class.member` counts as `Class`; Go names are the identifiers
+read off the package alias, `ledger.Open`); an export whose name cannot be parsed (`default`)
+breaks every importer. A locked dependent that is dirtied clears by re-committing its locked bytes
+unchanged (see Gate A).
 
 **TokenFirewall** — Door 1 of the gateway: the BYOK proxy that intercepts bloated `messages[]`,
 commits verified steps into the StateKernel, prunes dead-end exploration history, injects the
@@ -103,8 +115,11 @@ and pinned, any mutation rejected at Gate A; `DIRTY_OMISSION_RISK` → see Omiss
 ## Gates (run in order inside `commit()`)
 
 **Gate A — Mechanical & Locked:** source must parse (`ast`), exported defs required by
-dependents must keep their signatures, and a `LOCKED` node rejects every mutation.
-Failure: `MechanicalError`. `verified[]` untouched on rejection.
+dependents must keep their signatures, and a `LOCKED` node rejects every mutation. **Lock
+re-verification:** a commit whose source is byte-identical to the locked node's canonical state,
+whose on-disk bytes still hash to its last attestation, is not a mutation — it runs Gates B/C
+against the current upstream and lands with the node still `LOCKED` (how a locked module dirtied
+by a dependency change returns to clean). Failure: `MechanicalError`. `verified[]` untouched on rejection.
 
 **Gate B — Omission:** AST symbol fingerprinting. Rejects (1) dropped `preserved_symbols[]`
 (`INTRA_NODE_SYMBOL_DROPPED`), (2) >15% AST-statement shrinkage without `allow_deletion=True`
@@ -129,8 +144,11 @@ the guard is still exercised (hand-written calls are never filled in). **Structu
 invariants** (`guard:<Symbol>:<clause>`, Python as well as TS / Go / Rust / Java) need no runtime
 arguments, so they cover what `call:` mining cannot — methods (`Class.method`), nested scopes
 (`fn.Inner.m`), external types (`isinstance(x, CookieJar)`): every `if <cond> raises <Exc>` at any
-depth, every `assert <cond>`, a leading `if <cond> returns <const / None / empty>`, and every
-`except <T> raises <Exc>` handler. Clauses are normalized with `ast.unparse` (messages, quotes,
+depth, every `assert <cond>`, a leading `if <cond> returns <const / None / empty>`, a leading
+`if <cond> returns early` when the returned value is computed (the condition is pinned, the
+expression may be refactored), every `except <T> raises <Exc>` handler, and `<obj>.get('<key>')
+has default` for a `.get('<key>', <literal other than None>)` (any default keeps it; a bare
+`<obj>['<key>']` subscript drops it). Clauses are normalized with `ast.unparse` (messages, quotes,
 parentheses never matter) and a repeated clause is numbered (`… #2`). Gate C requires each to stay
 present anywhere in its symbol's body, after the executable invariants run; a leading guard the
 `call:` miner already exercises is left to that semantic check, so an equivalent rewrite passes.

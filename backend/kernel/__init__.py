@@ -103,8 +103,13 @@ class CheckoutPayload:
     focus: list[str] | None = None
     auto_skeletonized: bool = False
     elided: list[str] = field(default_factory=list)  # budget backstop: what the payload dropped
+    # Zero-inflation bypass: the frame is a one-line pragma + the raw source, and
+    # it is the whole rendered payload (see StateKernel._assemble).
+    pragma: bool = False
 
     def rendered(self) -> str:
+        if self.pragma:
+            return self.frame_markdown
         return _render_payload(
             self.frame_markdown, self.dependency_skeletons, self.locked_invariants
         )
@@ -200,6 +205,9 @@ class _Session:
     # Not persisted: node -> sha256 of on-disk bytes `sync` already refused, so
     # the same bad bytes are judged (and counted) once, not on every hook call.
     sync_refused: dict = field(default_factory=dict)
+    # Not persisted: st_mtime_ns of the session file when this process last read
+    # or wrote it (`refresh_sessions` reloads a session another process rewrote).
+    disk_mtime_ns: int = 0
 
 
 class StateKernel:
@@ -268,7 +276,7 @@ class StateKernel:
         if cached is None:
             cached = self._assemble(s, node, focus)
             s.payload_cache[key] = cached
-        frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided = cached
+        frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided, pragma = cached
         s.events.append(
             {
                 "kind": "checkout",
@@ -289,6 +297,7 @@ class StateKernel:
             focus=focus,
             auto_skeletonized=auto,
             elided=list(elided),
+            pragma=pragma,
         )
 
 
@@ -511,6 +520,16 @@ class StateKernel:
         listed = invariants
         rendered = _render_payload(frame, dep_skeletons, listed)
         tokens = _tokens.count(rendered)
+        if (focus and tokens > _tokens.count(node.info.source)
+                and _okf.covers_module(node.info.source, list(focus), compactor.tree)):
+            # Zero-inflation bypass: the focus covers the whole module and the OKF
+            # payload would still cost more than the raw file. Serve a one-line
+            # pragma + the source instead, when that is smaller; dependency interfaces
+            # and the invariant list are left out of the text (all still enforced; the
+            # invariants stay in `locked_invariants`).
+            pragma = _okf.pragma_frame(node.info, node.status, node.locked, len(node.info.invariants))
+            if _tokens.count(pragma) < tokens:
+                return pragma, dep_sigs, invariants, dep_skeletons, _tokens.count(pragma), False, [], True
         auto = False
         if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
             # Unfocused frame would blow the budget: fall back to a pure AST
@@ -534,7 +553,7 @@ class StateKernel:
             )
             rendered = _render_payload(frame, dep_skeletons, listed)
             tokens = _tokens.count(rendered)
-        return frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided
+        return frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided, False
 
     def flush(self, session_id: str) -> None:
         """Write the session's in-memory state — the telemetry of checkout-only
@@ -666,9 +685,13 @@ class StateKernel:
         before, after = _okf._signatures(node.info.source), _okf._signatures(staged_info.source)
         changed = {name for name, sig in before.items() if after.get(name) != sig}
         python = _okf.lang_module(node.info.path) is None
+        if not python:  # TS / Go / Rust / Java: per-name contract from the export signatures
+            fb, fa = _okf.export_signature_map(node.info.exports), _okf.export_signature_map(staged_info.exports)
+            changed = {name for name, sig in fb.items() if fa.get(name) != sig}
+            changed |= {name.split(".")[0] for name in changed}  # `Class.member` moved -> `Class` moved
         modules = self._modules(s)
         node.info = staged_info
-        node.status = VERIFIED
+        node.status = LOCKED if node.locked else VERIFIED  # a locked node only lands byte-identical
         commit_ordinal = 1 + sum(1 for e in s.events if e["kind"] == "commit")
 
         dirtied: list[str] = []
@@ -680,13 +703,14 @@ class StateKernel:
                 dep_id, dep.info.path, dep.info.source, modules
             ).get(node.info.node_id, set())
             # The contract a dependent relies on: the names it imports (`from m
-            # import a`), or every public export for a module import (`import m`).
-            # Signatures are compared for Python only; for TS / Go / Rust / Java
-            # any export change still dirties every importer (no re-verification).
-            if python:
-                broken = bool(imported & changed) if imported else bool(removed_exports)
+            # import a`, `import { a } from './m'`, `use crate::m::a`), or every
+            # public export for a module import (`import m`, Go's package import):
+            # then only a removed or re-signed export breaks it, an added one does
+            # not. "*" (an export whose name cannot be parsed) breaks every importer.
+            if imported:
+                broken = bool(imported & changed) or "*" in changed
             else:
-                broken = exports_changed
+                broken = bool(removed_exports)
             if not broken:
                 if not exports_changed:
                     continue  # nothing the dependent can see moved
@@ -754,7 +778,7 @@ class StateKernel:
         except GateError:
             return False
         dep.info = staged
-        dep.status = VERIFIED
+        dep.status = LOCKED if dep.locked else VERIFIED
         dep.verified.append(_dsse_envelope(dep_id, dep.info.path, dep.disk_sha256, staged.exports, ordinal))
         return True
 
@@ -774,8 +798,41 @@ class StateKernel:
         if path is None or not path.is_file():
             raise KeyError(session_id)
         s = _session_from_json(_read_json(path))
+        s.disk_mtime_ns = path.stat().st_mtime_ns
         self._sessions[session_id] = s
         return s
+
+    def refresh_sessions(self) -> dict[str, list[str]]:
+        """Reconcile the in-memory sessions with `<root>/.stepcheck/sessions/`: a
+        session whose file was archived or deleted is evicted (the next use is a
+        KeyError, as for any unknown id), and one whose file another process
+        rewrote since this process last read or wrote it (`st_mtime_ns` moved) is
+        reloaded from disk. What a long-lived gateway calls before serving a
+        request, so archiving a session or re-verifying it out of process takes
+        effect without a restart. A no-op on an ephemeral kernel.
+        Returns {"evicted": [...], "reloaded": [...]}."""
+        out: dict[str, list[str]] = {"evicted": [], "reloaded": []}
+        if self._ephemeral:
+            return out
+        for sid, s in list(self._sessions.items()):
+            path = s.root / ".stepcheck" / "sessions" / f"{sid}.json"
+            try:
+                mtime = path.stat().st_mtime_ns
+            except OSError:
+                del self._sessions[sid]
+                out["evicted"].append(sid)
+                continue
+            if mtime == s.disk_mtime_ns:
+                continue
+            data = path.read_bytes()
+            if _sha256(data) == s.persisted_sha:  # this process's own last write
+                s.disk_mtime_ns = mtime
+                continue
+            fresh = _session_from_json(_read_json(path))
+            fresh.disk_mtime_ns = mtime
+            self._sessions[sid] = fresh
+            out["reloaded"].append(sid)
+        return out
 
     def _get(self, session_id: str, node_id: str) -> tuple[_Session, _Node]:
         s = self._session(session_id)

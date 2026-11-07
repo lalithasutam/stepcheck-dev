@@ -715,6 +715,18 @@ async def _license_gate(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _session_freshness(request: Request, call_next):
+    """Before any session-backed request (REST, the hook relay, MCP, Door 1):
+    evict sessions whose `.stepcheck/sessions/<id>.json` was archived or
+    deleted, and reload any another process rewrote (StateKernel.refresh_sessions),
+    so a long-lived gateway never answers from a stale in-memory copy."""
+    path = request.url.path
+    if path.startswith(("/v1/", "/mcp")):
+        KERNEL.refresh_sessions()
+    return await call_next(request)
+
+
 @app.get("/v1/team/summary")
 async def team_summary(request: Request, project_root: str | None = None) -> dict:
     """Team FinOps & governance ledger across every registered session (or the

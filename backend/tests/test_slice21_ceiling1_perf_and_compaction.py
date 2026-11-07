@@ -174,7 +174,8 @@ def test_gate_a_rejection_on_a_locked_node_does_not_re_render_the_project(tmp_pa
     kernel = StateKernel()
     sid = kernel.init_session(tmp_path)
     kernel.lock_node(sid, "big0")
-    source = kernel.node_source(sid, "big0")
+    # A real mutation: a byte-identical commit is the re-verification a locked node accepts.
+    source = kernel.node_source(sid, "big0") + "\nPROBE = 1\n"
     first = kernel.commit(sid, "big0", source=source)
     assert not first.accepted and first.gate == "A"
 

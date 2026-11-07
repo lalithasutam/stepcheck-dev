@@ -253,6 +253,25 @@ def frame_markdown(
     return f"---\n{fm}---\n\n{body}"
 
 
+def covers_module(source: str, focus: list[str], tree: ast.Module | None) -> bool:
+    """Whether a focus (with its same-file causal cone) reaches every top-level
+    symbol of the module — nothing would be elided to `...`."""
+    if not focus:
+        return False
+    cone = list(focus) + (callee_closure(tree, list(focus), source)[0] if tree is not None else [])
+    return set(symbol_names(source)) <= {f for f in cone if "." not in f}
+
+
+def pragma_frame(info: ModuleInfo, status: str, locked: bool, invariants: int) -> str:
+    """The zero-inflation frame: one pragma comment line, then the raw source. For a
+    tiny module whose focus covers everything, the OKF frame would cost more than
+    the file; every invariant counted here is still enforced at the gates."""
+    lead = "#" if language(info.path) == "python" else "//"
+    state = f"{status}, locked" if locked else status
+    src = info.source if info.source.endswith("\n") else info.source + "\n"
+    return f"{lead} [stepcheck: {info.node_id} | {state} | invariants: {invariants} enforced]\n{src}"
+
+
 def index_markdown(nodes: dict[str, "object"]) -> str:
     """nodes: node_id -> Node (duck-typed: .status, .info.deps)."""
     edges = [
@@ -853,14 +872,21 @@ def _early_value(stmt: ast.Return) -> str | None:
     return None
 
 
-def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, leading_returns_only: bool) -> list[str]:
+def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list[str]:
     """The guard clauses of one def, normalized (`ast.unparse`: whitespace, quotes,
     parentheses and messages never matter):
       `if <cond> raises <Exc>`   — any `if` whose branch ends in `raise`, at any depth;
       `assert <cond>`            — any assert;
       `if <cond> returns <v>`    — an early return of a constant / None / empty
                                    container (leading run only when mining);
-      `except <T> raises <Exc>`  — a handler that raises (`<re-raise>` for bare raise)."""
+      `if <cond> returns early`  — a leading early return of a computed value: the
+                                   condition is held, the expression may be refactored;
+      `except <T> raises <Exc>`  — a handler that raises (`<re-raise>` for bare raise);
+      `<obj>.get('<key>') has default` — a `.get('<key>', <literal other than None>)`
+                                   lookup, which must not become a bare `<obj>['<key>']`.
+    `mining=False` lists what is present (Gate C's side): every early return also
+    counts as `returns early`, and a `.get` with any default keeps the lookup guarded."""
+    leading_returns_only = mining
     out: list[str] = []
     seen: dict[str, int] = {}
 
@@ -887,11 +913,19 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, leading_returns_only:
             if isinstance(last, ast.Raise):
                 add(f"if {ast.unparse(node.test)} raises {_raised(last)}")
             elif (isinstance(last, ast.Return) and len(node.body) == 1 and not node.orelse
-                  and (not leading_returns_only or id(node) in leading)
-                  and (value := _early_value(last)) is not None):
-                add(f"if {ast.unparse(node.test)} returns {value}")
+                  and (not leading_returns_only or id(node) in leading)):
+                cond, value = ast.unparse(node.test), _early_value(last)
+                if value is not None:
+                    add(f"if {cond} returns {value}")
+                if value is None or not mining:
+                    add(f"if {cond} returns early")
         elif isinstance(node, ast.Assert):
             add(f"assert {ast.unparse(node.test)}")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get"
+              and len(node.args) == 2 and not node.keywords
+              and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+              and (not mining or (isinstance(node.args[1], ast.Constant) and node.args[1].value is not None))):
+            add(f"{ast.unparse(node.func.value)}.get({node.args[0].value!r}) has default")
         elif isinstance(node, ast.ExceptHandler):
             caught = ast.unparse(node.type) if node.type is not None else "*"
             for sub in _own_nodes(node.body):
@@ -1263,6 +1297,34 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
         out.setdefault(nid, set())
         if name is not None:
             out[nid].add(name)
+    return out
+
+
+_DECL_NAME = re.compile(
+    r"\b(?:function\*?|func|fn|class|interface|type|enum|struct|trait|const|let|var|record)\s+"
+    r"(?:\([^)]*\)\s*)?([A-Za-z_$][\w$]*)"
+)
+_CALLABLE_NAME = re.compile(r"([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*\(")
+
+
+def export_signature_map(exports: list[str]) -> dict[str, str]:
+    """Export name -> signature for a TS / Go / Rust / Java module's `exports`
+    (`function add(a: number): number`, `func (r *T) Close() error { ... }`,
+    `pub fn add(..)`, `Lib.public static int add(int a)`): the declared name
+    after its keyword (a Go receiver skipped), else the identifier before the
+    parameter list. A `Class.` prefix is kept (`Lib.add`). A signature with no
+    recognisable name maps under "*", which callers treat as touching every
+    importer."""
+    out: dict[str, str] = {}
+    for sig in exports:
+        owner, rest = "", sig
+        m = re.match(r"([A-Za-z_$][\w$]*)\.(?=\S)", sig)
+        if m and not re.match(r"(?:pub|public|export)\b", sig):
+            owner, rest = m.group(1) + ".", sig[m.end():]
+        head = rest.split("{")[0]
+        name_m = _DECL_NAME.search(head) or _CALLABLE_NAME.search(head)
+        name = owner + name_m.group(1) if name_m and not re.search(r"\bdefault\b", head) else "*"
+        out[name] = sig if name not in out else out[name] + " | " + sig  # overloads
     return out
 
 
