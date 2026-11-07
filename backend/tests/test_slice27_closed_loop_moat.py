@@ -12,6 +12,9 @@ installed hook script; zero mocks).
 4. With the gateway down, the installed hook decides Edit / Write in-process and
    blocks a gate violation (exit 2, structured deny) before bytes land, and starts
    a detached local gateway so the following hook calls are answered warm.
+5. The causal cone reaches past `ast.Call`: bare same-file decorators, the module
+   constants the cone reads, and a focused method's `__init__` / `__post_init__`
+   and class-level attributes are rendered verbatim.
 
 The head-to-head test emulates signature-only compression (every body reduced to
 `...`, the view Repomix `--compress` / LeanCTX `signatures` give a model) with the
@@ -546,3 +549,85 @@ def test_gateway_down_hook_without_a_stepcheck_install_fails_open(billing_projec
     out = _run_hook(script, edit, backend=None, python=str(python))
     assert out.returncode == 0 and out.stdout == ""
     assert "allowing" in out.stderr
+
+
+# ------------------------------- 5. the causal cone beyond `ast.Call`
+
+LEDGER = textwrap.dedent('''\
+    """Ledger: same-file decorators, module constants and class state."""
+    import functools
+    from dataclasses import dataclass, field
+
+    ZERO_DECIMAL = {"JPY", "KRW"}
+    UNUSED_CONST = "UNUSED_CONST_MARKER"
+    LOG_PREFIX = "AUDIT_PREFIX_MARKER"
+
+
+    def audited(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            print(LOG_PREFIX, fn.__name__)
+            return fn(*args, **kwargs)
+        return wrapper
+
+
+    @audited
+    def minor_units(amount: int, currency: str) -> int:
+        if currency in ZERO_DECIMAL:
+            return amount
+        return amount * 100
+
+
+    class Account:
+        kind = "ACCOUNT_KIND_MARKER"
+        limit: int = 5000
+
+        def __init__(self, owner: str) -> None:
+            self.owner = owner
+            self.balance_minor = 0
+
+        def deposit(self, minor: int) -> int:
+            self.balance_minor += minor
+            return self.balance_minor
+
+        def describe(self) -> str:
+            return "DESCRIBE_MARKER"
+
+
+    @dataclass
+    class Invoice:
+        currency: str = "USD"
+        lines: list = field(default_factory=list)
+
+        def __post_init__(self) -> None:
+            self.lines = list(self.lines)
+
+        def total(self) -> int:
+            return sum(self.lines)
+    ''')
+
+
+def test_focus_keeps_decorators_constants_and_class_state_in_the_cone(kernel, tmp_path):
+    (tmp_path / "ledger.py").write_text(LEDGER, encoding="utf-8", newline="\n")
+    sid = kernel.init_session(tmp_path)
+
+    # (a) + (b): a bare same-file decorator and the constants the cone reads, verbatim.
+    frame = kernel.checkout(sid, "ledger", focus=["minor_units"]).frame_markdown
+    assert 'ZERO_DECIMAL = {"JPY", "KRW"}' in frame          # read by the focus
+    assert "print(LOG_PREFIX, fn.__name__)" in frame         # `@audited` body (not an ast.Call)
+    assert 'LOG_PREFIX = "AUDIT_PREFIX_MARKER"' in frame     # read by the decorator, transitively
+    assert "UNUSED_CONST_MARKER" not in frame                # unreferenced constants still fold
+    assert "DESCRIBE_MARKER" not in frame
+
+    # (c): a focused method keeps its class's __init__ body and class-level attributes.
+    acct = kernel.checkout(sid, "ledger", focus=["Account.deposit"]).frame_markdown
+    assert "self.balance_minor += minor" in acct
+    assert "self.balance_minor = 0" in acct and "self.owner = owner" in acct
+    assert 'kind = "ACCOUNT_KIND_MARKER"' in acct and "limit: int = 5000" in acct
+    assert "DESCRIBE_MARKER" not in acct                     # siblings stay signatures
+
+    # (c): dataclass fields and __post_init__ for a focused dataclass method.
+    inv = kernel.checkout(sid, "ledger", focus=["Invoice.total"]).frame_markdown
+    assert 'currency: str = "USD"' in inv and "lines: list = field(default_factory=list)" in inv
+    assert "self.lines = list(self.lines)" in inv
+    assert "ZERO_DECIMAL = {" not in inv                     # not in this cone

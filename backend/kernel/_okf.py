@@ -204,7 +204,15 @@ def frame_markdown(
             else " Pure skeleton; commit a `patch` to fold edits in."
         )
         if callees:
-            note += f" Same-file callees of the focus, expanded verbatim: {', '.join(callees)}."
+            note += (" Same-file callees, decorators and class state (__init__ / __post_init__)"
+                     f" of the focus, expanded verbatim: {', '.join(callees)}.")
+        if tree is not None and focus:
+            consts, consts_over = cone_constants(tree, list(focus) + callees, info.source)
+            if consts:
+                note += f" Module constants the focus reads, kept verbatim: {', '.join(consts)}."
+            if consts_over:
+                note += (f" Constants folded (over the {CONST_TOKEN_BUDGET:,}-token constant budget):"
+                         f" {', '.join(consts_over)}.")
         if over_budget:
             note += (f" Callees kept as signatures (over the {CALLEE_TOKEN_BUDGET:,}-token callee budget;"
                      f" add them to focus to see them): {', '.join(over_budget)}.")
@@ -356,10 +364,14 @@ def _skeleton_class(
     text = ast.get_docstring(node)
     if text and doc:
         out.append(f'    """{_doc_line(text) if doc == "first" else text}"""\n')
+    attrs = []
+    if focus_members and lines is not None:  # class-level state a focused method reads: verbatim
+        attrs = [_segment(lines, s) for s in node.body if isinstance(s, (ast.Assign, ast.AnnAssign))]
+        out.extend(attrs)
     members = [n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     shown = [m for m in members if keep_methods is None or m.name in keep_methods or m.name in focus_members]
     hidden = len(members) - len(shown)
-    if not shown and not (text and doc):
+    if not shown and not attrs and not (text and doc):
         out.append("    ...\n")
     for m in shown:
         if m.name in focus_members and lines is not None:
@@ -387,6 +399,9 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
     sibling classes the focus does not reference collapse to counted one-line
     stubs (a run of four or more folds into one line naming them), the module
     docstring to its summary line, and imports the focus cannot reach to a count.
+    The causal cone rides along verbatim: same-file callees and bare decorators,
+    a focused method's `__init__` / `__post_init__` and class-level attributes,
+    and the module constants the cone reads (see callee_closure, cone_constants).
     `elide_methods` (the budget backstop) keeps only `__init__`, the focused
     methods and the methods the focus references, counting the rest.
     `compact` is the unfocused budget ladder: 1 drops docstring lines, `__init__`
@@ -419,6 +434,7 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
                 if owner is not None:
                     referenced |= _names_in(owner.bases) | _names_in(owner.decorator_list)
         referenced |= keep | set(members)
+    consts = set(cone_constants(tree, focus, source)[0]) if focused else set()
     out: list[str] = []
     pending_assigns: list[str] = []
     pending_stubs: list[tuple[str, str]] = []
@@ -462,7 +478,7 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
 
     def category(stmt: ast.stmt) -> str:
         if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-            return "assign"
+            return "const" if _bound_names(stmt) & consts else "assign"
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             return "import"
         if isinstance(stmt, ast.ClassDef) and focused and stmt.name not in keep and stmt.name not in members and stmt.name not in referenced:
@@ -477,8 +493,10 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
         kind = category(stmt)
         if kind != last:
             flush()
-        last = kind
-        if kind == "assign":
+        prev, last = last, kind
+        if kind == "const":  # a constant the cone reads: verbatim, not folded
+            out.append(("\n\n" if prev in ("def", "stub") else "") + _segment(lines, stmt))
+        elif kind == "assign":
             pending_assigns.extend(_assign_names(stmt))
         elif kind == "import":
             if focused or compact >= 2:
@@ -1221,27 +1239,94 @@ def callee_closure(tree: ast.Module, focus: list[str], source: str | None = None
             spent += cost
             expanded.append(sym)
         owner_default = sym.split(".")[0] if "." in sym else None
+        targets: list[str] = []
+        if owner_default is not None and owner_default not in covered:
+            # A method's class state: `__init__` / `__post_init__` declare the
+            # `self.<attr>` it reads, and the class's own same-file decorators wrap it.
+            targets += [f"{owner_default}.{m}" for m in _STATE_METHODS if m in methods.get(owner_default, ())]
+            owner_cls = next((s for s in tree.body if isinstance(s, ast.ClassDef) and s.name == owner_default), None)
+            if owner_cls is not None:
+                targets += [d.id for d in owner_cls.decorator_list if isinstance(d, ast.Name) and d.id in funcs]
         for node in group:
             owner = node.name if isinstance(node, ast.ClassDef) else owner_default
-            for call in ast.walk(node):
-                if not isinstance(call, ast.Call):
+            for sub in ast.walk(node):
+                # A bare `@decorator` is an ast.Name, not a call: follow it too.
+                targets += [d.id for d in getattr(sub, "decorator_list", ())
+                            if isinstance(d, ast.Name) and d.id in funcs]
+                if not isinstance(sub, ast.Call):
                     continue
-                fn = call.func
-                target = None
+                fn = sub.func
                 if isinstance(fn, ast.Name) and fn.id in funcs:
-                    target = fn.id
+                    targets.append(fn.id)
                 elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
                     recv = fn.value.id
                     cls = owner if recv in ("self", "cls") else recv
                     if cls in methods and fn.attr in methods[cls] and (recv in ("self", "cls") or recv in methods):
-                        target = f"{cls}.{fn.attr}"
-                if target is None or target in seen or target.split(".")[0] in covered:
-                    continue
-                seen.add(target)
-                callee_group = _resolve_symbol(tree, target)[1]
-                if callee_group:
-                    heapq.heappush(heap, (depth + 1, cost_of(callee_group), target))
+                        targets.append(f"{cls}.{fn.attr}")
+        for target in targets:
+            if target in seen or target.split(".")[0] in covered:
+                continue
+            seen.add(target)
+            callee_group = _resolve_symbol(tree, target)[1]
+            if callee_group:
+                heapq.heappush(heap, (depth + 1, cost_of(callee_group), target))
     return sorted(expanded), sorted(skipped)
+
+
+_STATE_METHODS = ("__init__", "__post_init__")
+CONST_TOKEN_BUDGET = 600  # verbatim module-level constants a focused checkout may add
+
+
+def _bound_names(stmt: ast.stmt) -> set[str]:
+    """Plain names an Assign / AnnAssign binds (tuple targets unpacked)."""
+    targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+    return {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+
+
+def _loads(nodes) -> set[str]:
+    return {n.id for node in nodes for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+
+def cone_constants(tree: ast.Module, cone: list[str], source: str | None = None,
+                   budget: int = CONST_TOKEN_BUDGET) -> tuple[list[str], list[str]]:
+    """Module-level constants (`ast.Assign` / `ast.AnnAssign`) the causal cone
+    reads by bare name — the focused symbols plus their expanded callees, and the
+    class-level attributes of a focused method's class — followed transitively
+    through constants built from other constants. With `source`, a constant whose
+    statement would push the total past `budget` tokens stays folded.
+    Returns (verbatim, over_budget) bound names, both sorted."""
+    from . import _tokens
+
+    read: set[str] = set()
+    for sym in cone:
+        read |= _loads(_resolve_symbol(tree, sym)[1])
+        if "." in sym:
+            owner = next((s for s in tree.body if isinstance(s, ast.ClassDef) and s.name == sym.split(".")[0]), None)
+            if owner is not None:
+                read |= _loads(s for s in owner.body if isinstance(s, (ast.Assign, ast.AnnAssign)))
+    lines = source.splitlines(keepends=True) if source is not None else None
+    assigns = [s for s in tree.body if isinstance(s, (ast.Assign, ast.AnnAssign))]
+    kept: set[str] = set()
+    skipped: set[str] = set()
+    done: set[int] = set()
+    spent = 0
+    changed = True
+    while changed:
+        changed = False
+        for i, stmt in enumerate(assigns):
+            names = _bound_names(stmt)
+            if i in done or not names & read:
+                continue
+            done.add(i)
+            cost = _tokens.count(_segment(lines, stmt)) if lines is not None else 0
+            if lines is not None and spent + cost > budget:
+                skipped |= names
+                continue
+            spent += cost
+            kept |= names
+            read |= _loads([stmt.value] if stmt.value is not None else [])
+            changed = True
+    return sorted(kept), sorted(skipped - kept)
 
 
 def _class_stub(node: ast.ClassDef) -> str:

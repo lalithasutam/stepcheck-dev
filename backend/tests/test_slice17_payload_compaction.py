@@ -215,7 +215,9 @@ def test_dotted_focus_emits_the_method_keeps_init_and_stubs_unreferenced_sibling
     assert "        return self.w * self.h\n" in body  # focused method verbatim
     assert "Multiplies the sides" in body  # the focused method's own docstring stays intact
     assert "def __init__(self, w: int, h: int) -> None:" in body and "def perimeter(self) -> int:" in body
-    assert "Store the sides" not in body and "Adds the sides twice" not in body  # sibling docstrings stripped
+    # v0.3.2 causal cone: the class's __init__ (its self.<attr> state) is verbatim, docstring included
+    assert "Store the sides" in body and "self.w, self.h = w, h" in body
+    assert "Adds the sides twice" not in body  # other sibling docstrings stripped
     assert "class Sibling(Base): ...\n" in body and "def noise" not in body  # unreferenced sibling: one-line stub
     assert "class Base:" in body and "def ident(self) -> int:" in body  # Target(Base) references Base
     assert "def helper(v: int) -> int:" in body and "return v" not in body

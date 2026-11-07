@@ -282,9 +282,10 @@ def test_dotted_focus_collapses_unreferenced_siblings_scopes_imports_and_keeps_t
     sid = kernel.init_session(tmp_path)
     body = _body(kernel.checkout(sid, "store", focus=["Repo.add"]))
 
-    # the target method verbatim; its class keeps __init__ and every own method signature, bodies and docstrings gone
+    # the target method verbatim; its class keeps __init__ verbatim (v0.3.2 causal cone: the
+    # self.<attr> declarations) and every other own method as a signature, bodies and docstrings gone
     assert "self.items.append(json.loads(json.dumps(item)))" in body
-    assert "def __init__(self, config: Config) -> None:" in body and "Keep the config" not in body
+    assert "def __init__(self, config: Config) -> None:" in body and "self.config = config" in body
     assert "def total(self) -> int:" in body and "return sum(self.items)" not in body and "Sum of the items" not in body
     assert "def _reset(self) -> None:" in body
     # referenced siblings keep their skeleton (Base: a base class; Config: called in the method)
@@ -394,7 +395,9 @@ def test_statekernel_method_focus_is_half_the_class_focus_on_the_real_kernel(ker
     # by design, so the absolute floor carries headroom for that growth.
     # Slice 27 renders the same-file callees of the focus verbatim, within a
     # 1,000-token callee budget (`_okf.CALLEE_TOKEN_BUDGET`): 3,063 against
-    # 8,275 (37.0%) on 2026-11-05. The floor is the old one plus that budget:
+    # 8,275 (37.0%) on 2026-11-05. v0.3.2 adds the class state (`__init__`)
+    # to that cone, inside the same budget: 3,180 against 8,365 (38.0%) on
+    # 2026-11-07. The floor is the old one plus that budget:
     assert method.token_count < 2300 + 1000, (method.token_count, whole.token_count)
-    assert "Same-file callees of the focus, expanded verbatim: StateKernel._flush, StateKernel._get" in method.frame_markdown
+    assert "of the focus, expanded verbatim: StateKernel.__init__, StateKernel._flush, StateKernel._get" in method.frame_markdown
     assert method.token_count <= 0.4 * whole.token_count, (method.token_count, whole.token_count)
