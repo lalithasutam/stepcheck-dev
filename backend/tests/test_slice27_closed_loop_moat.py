@@ -447,7 +447,7 @@ def test_post_tool_use_adopts_the_written_file_so_ci_is_green_at_once(billing_pr
     assert cli.main(["hooks", str(billing_project)]) == 0
     migrated = json.loads((billing_project / ".claude" / "settings.json").read_text(encoding="utf-8"))["hooks"]
     ours = [h["command"] for e in migrated.values() for m in e for h in m["hooks"] if "stepcheck_hook.py" in h["command"]]
-    assert sorted(ours) == sorted([commands.pop()] * 3)
+    assert sorted(ours) == sorted([commands.pop()] * 4)  # SessionStart, PreToolUse, PostToolUse, Stop
     assert any(h["command"] == "echo bye" for m in migrated["Stop"] for h in m["hooks"])
 
 

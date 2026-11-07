@@ -34,6 +34,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -S \"$CLAUDE_PROJECT_DIR/.claude/hooks/stepcheck_hook.py\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

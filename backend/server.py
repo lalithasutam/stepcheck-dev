@@ -19,6 +19,7 @@ import dataclasses
 import math
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,6 +35,10 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
 from kernel import StateKernel
+
+# When this process loaded the kernel code: the SessionStart staleness guard compares
+# it with the backend sources' mtimes (see the hook script's _session_start).
+STARTED_AT = time.time()
 
 KERNEL = StateKernel()
 
@@ -618,7 +623,13 @@ async def step_hook(request: Request) -> dict:
         event = await request.json()
     except ValueError:
         event = {}
-    return hooks.decide(event if isinstance(event, dict) else {}, KERNEL)
+    event = event if isinstance(event, dict) else {}
+    out = hooks.decide(event, KERNEL)
+    if event.get("hook_event_name") == "SessionStart":
+        # Identity for the relay's staleness guard; the relay strips this key.
+        out = dict(out, stepcheck_gateway={"pid": os.getpid(), "started": STARTED_AT,
+                                           "daemon": os.environ.get("STEPCHECK_DAEMON") == "1"})
+    return out
 
 
 def _session_summary(session_id: str, node_id: str | None) -> str:

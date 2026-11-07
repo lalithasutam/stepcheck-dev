@@ -57,7 +57,7 @@ Tools: `init_project_session`, `checkout_context_frame`, `commit_verified_step`,
   `backend/server.py`. Never mock internal modules, AST parsers, YAML, hashes.
   `_`-prefixed modules in `backend/kernel/` are implementation, not interface.
 - Red → Green: a failing test at a seam before the implementation.
-- Run `cd backend && python -m pytest -q` before finishing; 251 tests must pass,
+- Run `cd backend && python -m pytest -q` before finishing; 255 tests must pass,
   including the ≥85% benchmark gate. If you change the benchmark, regenerate
   with `stepcheck benchmark && stepcheck review && stepcheck preview` and keep
   README / LAUNCH figures in sync with `benchmarks/results.json`.
