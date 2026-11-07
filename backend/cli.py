@@ -336,6 +336,22 @@ def main(argv: list[str] | None = None) -> int:
     return args.fn(args)
 
 
+def _project_version(root: Path) -> str:
+    """The release version: `pyproject.toml` in a checkout (the source of truth; an
+    editable install's metadata can lag behind it), else the installed package's."""
+    try:
+        import tomllib
+
+        return tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    except (OSError, KeyError, ValueError):
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("stepcheck-dev")
+        except PackageNotFoundError:
+            return "0.0.0"
+
+
 def cmd_llms(args: argparse.Namespace) -> int:
     """Generate `llms.txt` + `llms-full.txt` (llmstxt.org) from the repository's
     own files: the only numbers in them come from benchmarks/results.json, so a
@@ -348,6 +364,7 @@ def cmd_llms(args: argparse.Namespace) -> int:
     caught = final.get("caught", [])
     injected = final.get("injected", caught)
     f = final["final"]
+    version = _project_version(root)
     repo = "https://github.com/lalithasutam/stepcheck-dev"
     pages = "https://lalithasutam.github.io/stepcheck-dev"
     summary = (
@@ -383,7 +400,7 @@ def cmd_llms(args: argparse.Namespace) -> int:
              "pipx install git+https://github.com/lalithasutam/stepcheck-dev, then stepcheck audit and stepcheck up"),
             ("MCP for Claude Code", f"{repo}#claude-code-slash-commands-work-out-of-the-box-after-cloning",
              "claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/ and the four shipped slash commands"),
-            ("Release v0.1.0", f"{repo}/releases/tag/v0.1.0",
+            (f"Release v{version}", f"{repo}/releases/tag/v{version}",
              "source and the self-contained studio preview"),
         ]),
         ("Optional", [

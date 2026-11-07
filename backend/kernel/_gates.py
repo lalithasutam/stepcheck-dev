@@ -149,11 +149,51 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
     old_n = _okf.statement_count(old_source)
     new_n = _okf.statement_count(new_source)
     if old_n and (old_n - new_n) / old_n > 0.15:
-        raise OmissionError(
-            f"staged source drops {old_n - new_n}/{old_n} AST statements "
-            f"(> 15%) without allow_deletion=True",
-            subtype="INTRA_NODE_MASS_DELETION",
-        )
+        lost = _lost_bindings(node.info.path, old_source, new_source)
+        changed = sorted(set(node.info.exports) - set(staged_info.exports))
+        if lost is None or lost or changed:
+            what = f" (lost: {', '.join((lost or []) + changed)[:200]})" if lost or changed else ""
+            raise OmissionError(
+                f"staged source drops {old_n - new_n}/{old_n} AST statements "
+                f"(> 15%) without allow_deletion=True{what}",
+                subtype="INTRA_NODE_MASS_DELETION",
+            )
+        # Otherwise a concise refactor: every def, class, method and module- or
+        # class-level binding survives with its exported signature, no body became
+        # a stub (checked above), and Gate C still holds every mined guard clause.
+
+
+def _bindings(tree: ast.Module) -> set[str]:
+    """Named things a module defines: top-level and class-level defs, classes and
+    assigned names, dotted by their owner class (`Box.width`)."""
+    out: set[str] = set()
+
+    def walk(body: list, prefix: str) -> None:
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.add(prefix + stmt.name)
+            elif isinstance(stmt, ast.ClassDef):
+                out.add(prefix + stmt.name)
+                walk(stmt.body, f"{prefix}{stmt.name}.")
+            elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                for t in targets:
+                    out.update(prefix + n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+
+    walk(tree.body, "")
+    return out
+
+
+def _lost_bindings(path: str, old_source: str, new_source: str) -> list[str] | None:
+    """Bindings of the old module missing from the new one (sorted); None when the
+    sources are not Python (the plain statement-count rule then applies)."""
+    if not str(path).endswith((".py", ".pyi")):
+        return None
+    try:
+        old, new = _bindings(ast.parse(old_source)), _bindings(ast.parse(new_source))
+    except SyntaxError:
+        return None
+    return sorted(old - new)
 
 
 def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
@@ -361,23 +401,10 @@ def gate_c(
     kernel.LogicalError.
     """
     guard_invariants = [inv for inv in invariants if inv.startswith("guard:")]
-    if guard_invariants:
-        # Structural invariants (TypeScript / Go / Rust / Java): a mined leading guard
-        # must still exist in the symbol's body — anywhere in it, equivalent after
-        # whitespace normalisation — unless the commit declared the deletion.
-        from . import LogicalError as _LogicalError, _okf as _okf_
-
-        _path = (project_paths or {}).get(node_id, f"{node_id}.py")
-        present = _okf_.present_guards(staged_source, _path)
-        for inv in guard_invariants:
-            if inv not in present:
-                raise _LogicalError(
-                    f"staged diff violates frame invariant {inv!r} of '{node_id}' "
-                    f"(auto-mined leading guard clause removed or weakened)"
-                )
-        invariants = [inv for inv in invariants if not inv.startswith("guard:")]
+    invariants = [inv for inv in invariants if not inv.startswith("guard:")]
     if not invariants:
-        return  # nothing left to execute (foreign modules carry only guard invariants)
+        # nothing to execute (foreign modules carry only guard invariants)
+        return _structural_guards(node_id, guard_invariants, staged_source, project_paths)
     from . import LogicalError, _sandbox
 
     tree = ast.parse(staged_source)
@@ -467,4 +494,26 @@ def gate_c(
             tag = " (auto-mined from a leading guard clause)" if mined and inv in mined else ""
             raise LogicalError(
                 f"staged diff violates frame invariant {inv!r} of '{node_id}'{tag}"
+            )
+    _structural_guards(node_id, guard_invariants, staged_source, project_paths)
+
+
+def _structural_guards(node_id: str, guard_invariants: list[str], staged_source: str,
+                       project_paths: dict[str, str] | None) -> None:
+    """Structural `guard:<symbol>:<clause>` invariants (Python, TypeScript, Go, Rust,
+    Java): each mined guard clause must still exist in its symbol's body — anywhere
+    in it, equal after normalisation — unless the commit declared the deletion.
+    Runs after the executable invariants, whose failures are more specific."""
+    if not guard_invariants:
+        return
+    from . import LogicalError, _okf
+
+    path = (project_paths or {}).get(node_id, f"{node_id}.py")
+    present = _okf.present_guards(staged_source, path)
+    kind = "guard clause" if _okf.lang_module(path) is None else "leading guard clause"
+    for inv in guard_invariants:
+        if inv not in present:
+            raise LogicalError(
+                f"staged diff violates frame invariant {inv!r} of '{node_id}' "
+                f"(auto-mined {kind} removed or weakened)"
             )

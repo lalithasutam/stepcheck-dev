@@ -159,7 +159,10 @@ def test_self_hosting_on_stepchecks_own_backend(kernel, tmp_path):
     assert ids["kernel.__init__"] == "kernel/__init__.py"
     assert {"_gates", "_okf", "_sandbox", "server", "cli", "audit", "conftest"} <= set(ids)
     assert "kernel.__init__" in _node(kernel, sid, "server")["deps"]
-    assert set(_node(kernel, sid, "kernel.__init__")["deps"]) == {"_gates", "_okf", "_telemetry", "_tokens"}
+    # Function-scoped (lazy) imports are dependencies too: `_compactor` and `_compliance`
+    # are imported inside StateKernel methods.
+    assert set(_node(kernel, sid, "kernel.__init__")["deps"]) == {
+        "_gates", "_okf", "_telemetry", "_tokens", "_compactor", "_compliance"}
 
     frame = kernel.checkout(sid, "_gates", focus=["gate_b"])
     rendered = frame.rendered()

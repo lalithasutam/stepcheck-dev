@@ -1,6 +1,6 @@
 # StepCheck: a deterministic context firewall and gated state engine for AI coding agents
 
-Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `8595eef` (post-slice).
+Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `7c5ed0a` (post-slice).
 
 ## Abstract
 
@@ -22,7 +22,7 @@ The kernel (Seam 1) exposes `init_session`, `checkout(focus=)`, `commit(patch=)`
 
 ### 2.2 Compaction and context cost
 
-50-turn benchmark: 120,815 raw tokens versus 15,219 sent (87.4% saved). On the repository's own modules:
+50-turn benchmark: 120,815 raw tokens versus 15,039 sent (87.6% saved). On the repository's own modules:
 
 | per-turn context source | tokens | saved vs (b) |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ Faults are synthetic AST mutations. All timings come from one Windows machine. T
 
 ## 4. Reproducibility
 
-`python -m pytest -q` (255 passed), `stepcheck ci .` (71 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
+`python -m pytest -q` (264 passed), `stepcheck ci .` (72 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
 
 ## 5. v0.2 campaign results
 

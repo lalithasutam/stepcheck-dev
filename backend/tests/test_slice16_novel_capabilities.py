@@ -311,7 +311,10 @@ def test_miner_skips_a_guard_its_untyped_predecessor_would_trip_first(kernel, tm
     # first guard and every valid edit to the module was rejected at Gate C.
     _write(tmp_path, {"win.py": WINDOWED})
     sid = kernel.init_session(tmp_path)
-    assert _node(kernel, sid, "win")["invariants_auto_mined"] == ["call:windowed(seq=None, n=-1) raises ValueError"]
+    mined = _node(kernel, sid, "win")["invariants_auto_mined"]
+    assert [m for m in mined if m.startswith("call:")] == ["call:windowed(seq=None, n=-1) raises ValueError"]
+    # The skipped `step` guard is no longer unprotected: it is held structurally.
+    assert "guard:windowed:if step < 1 raises ValueError" in mined
     ok = kernel.commit(sid, "win", patch=[{"op": "append", "code": "LIMIT = 1\n"}])
     assert ok.accepted, ok.error
 
@@ -369,6 +372,16 @@ def test_llms_txt_is_generated_from_repo_facts_only(tmp_path, capsys):
     assert f"{results['savings_pct']}%" in llms
     assert f"{results['raw_bloated_tokens']:,}" in llms and f"{results['compacted_okf_tokens']:,}" in llms
     assert "# StepCheck Dev" in full and "GLOSSARY" in full and "## Security model" in full
+
+
+def test_llms_release_link_tracks_the_pyproject_version(tmp_path):
+    import tomllib
+
+    version = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    assert cli.main(["llms", "--out", str(tmp_path)]) == 0
+    llms = (tmp_path / "llms.txt").read_text(encoding="utf-8")
+    assert f"[Release v{version}](https://github.com/lalithasutam/stepcheck-dev/releases/tag/v{version})" in llms
+    assert "v0.1.0" not in llms or version == "0.1.0"
 
 
 def test_llms_generation_is_byte_deterministic(tmp_path):

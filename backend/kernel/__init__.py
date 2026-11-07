@@ -110,12 +110,44 @@ class CheckoutPayload:
         )
 
 
+def _scope_guards(node, nodes, invariants: list[str], focus: list[str] | None, tree) -> tuple[list[str], int]:
+    """The invariants a checkout lists, and how many structural `guard:` ones it
+    leaves out. A full frame (`focus=None`) lists everything. A focused or skeleton
+    frame of a Python module lists the `guard:` invariants of the focused symbols
+    (a focused class: all its methods) only — the rest are counted, never dropped
+    from Gate C — and a locked dependency's Python guards are counted too. When
+    the frame shows the whole module (compact header), every guard is listed."""
+    if focus and tree is not None:
+        cone = list(focus) + _okf.callee_closure(tree, list(focus), node.info.source)[0]
+        if set(_okf.symbol_names(node.info.source)) <= {f for f in cone if "." not in f}:
+            focus = None
+    if focus is None or _okf.lang_module(node.info.path) is not None:
+        return invariants, 0
+    effective = list(focus)  # the focus itself: its callees' guards are counted, not listed
+    own = set(node.info.invariants)
+
+    def relevant(inv: str) -> bool:
+        sym = inv.split(":", 2)[1]
+        return any(sym == f or sym.startswith(f + ".") for f in effective)
+
+    kept = [inv for inv in invariants
+            if not inv.startswith("guard:") or (inv in own and relevant(inv))]
+    return kept, len(invariants) - len(kept)
+
+
 def _render_payload(frame: str, dep_skeletons: dict[str, str], invariants: list[str]) -> str:
-    parts = [frame, "\n## Verified dependency interfaces (AST skeletons)\n"]
-    for dep, sk in sorted(dep_skeletons.items()):
-        parts.append(f"### {dep}\n```python\n{sk}```\n")
-    parts.append("\n## Locked invariants\n")
-    parts.extend(f"- {inv}\n" for inv in invariants)
+    parts = [frame]
+    sections = [
+        f"### {dep}\n```python\n{sk}```\n"
+        for dep, sk in sorted(dep_skeletons.items())
+        # skipped: nothing imported from it is in scope (it is listed under deps: already)
+        if not all(line.lstrip().startswith("#") for line in sk.splitlines() if line.strip())
+    ]
+    if sections:  # empty headings are pure overhead on small, dependency-free modules
+        parts += ["\n## Verified dependency interfaces (AST skeletons)\n", *sections]
+    if invariants:
+        parts.append("\n## Locked invariants\n")
+        parts.extend(f"- {inv}\n" for inv in invariants)
     return "".join(parts)
 
 
@@ -469,11 +501,15 @@ class StateKernel:
         for dep in node.info.deps:
             if dep in s.nodes and s.nodes[dep].locked:
                 invariants.extend(s.nodes[dep].info.invariants)
+        invariants, _hidden = _scope_guards(node, s.nodes, invariants, focus, compactor.tree)
         frame = _okf.frame_markdown(
             node.info, node.status, node.locked, node.verified,
             focus=focus, fold_history=True, compact_meta=bool(focus), tree=compactor.tree,
         )
-        rendered = _render_payload(frame, dep_skeletons, invariants)
+        # The frame's frontmatter carries the total (`guard_invariants: N`); the rest
+        # of the guards stay enforced at Gate C without being listed here.
+        listed = invariants
+        rendered = _render_payload(frame, dep_skeletons, listed)
         tokens = _tokens.count(rendered)
         auto = False
         if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
@@ -483,7 +519,7 @@ class StateKernel:
                 node.info, node.status, node.locked, node.verified,
                 focus=[], fold_history=True, symbol_index=True, tree=compactor.tree,
             )
-            rendered = _render_payload(frame, dep_skeletons, invariants)
+            rendered = _render_payload(frame, dep_skeletons, listed)
             tokens = _tokens.count(rendered)
             auto = True
         elided: list[str] = []
@@ -493,10 +529,10 @@ class StateKernel:
             # then (unfocused only) docstrings / __init__ / parameters. The
             # focused symbol and every top-level public name survive.
             frame, dep_skeletons, elided = compactor.fit(
-                frame, dep_skeletons, invariants, CHECKOUT_TOKEN_BUDGET,
+                frame, dep_skeletons, listed, CHECKOUT_TOKEN_BUDGET,
                 _tokens.count, _render_payload, focus=[] if auto else focus,
             )
-            rendered = _render_payload(frame, dep_skeletons, invariants)
+            rendered = _render_payload(frame, dep_skeletons, listed)
             tokens = _tokens.count(rendered)
         return frame, dep_sigs, invariants, dep_skeletons, tokens, auto, elided
 

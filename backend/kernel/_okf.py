@@ -108,7 +108,7 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
 
     manual = harvest_invariants(source)
     mined = []
-    for inv in mine_guard_invariants(tree) + mine_branch_invariants(tree):
+    for inv in mine_guard_invariants(tree) + mine_branch_invariants(tree) + mine_structural_guards(tree):
         if inv not in manual and inv not in mined:
             mined.append(inv)
     invariants = manual + mined
@@ -169,6 +169,14 @@ def frame_markdown(
             "latest_sha256": latest["payload"]["sha256"] if latest else None,
             "latest_turn": latest["payload"]["turn"] if latest else None,
         }
+        if focus is not None and fence == "python":
+            # A sliced payload lists structural guards once, in its Locked invariants
+            # section (scoped to the focus); the frontmatter only counts them.
+            guards = sum(inv.startswith("guard:") for inv in meta["invariants"])
+            if guards:
+                for key in ("invariants", "invariants_auto_mined"):
+                    meta[key] = [inv for inv in meta[key] if not inv.startswith("guard:")]
+                meta["guard_invariants"] = guards
     else:
         meta["verified"] = verified
     scoped = ""
@@ -216,6 +224,26 @@ def frame_markdown(
         if over_budget:
             note += (f" Callees kept as signatures (over the {CALLEE_TOKEN_BUDGET:,}-token callee budget;"
                      f" add them to focus to see them): {', '.join(over_budget)}.")
+        tops = {f for f in list(focus) + callees if "." not in f}
+        covers = (bool(focus) and set(symbol_names(info.source)) <= tops
+                  and len(body_src) >= 0.9 * len(info.source))  # nothing folded (data ballast)
+        if fold_history and (covers or len(fm) + len(note) > len(info.source)):
+            # The focus already covers the whole module, or the full header
+            # would outweigh the file: a minimal header (the slice itself unchanged,
+            # or the source verbatim when the slice is the module). Exports,
+            # preserved symbols and invariants are in the code shown or the
+            # payload's Locked invariants list, and all still enforced at the gates.
+            mini = {k: meta[k] for k in ("node_id", "path", "status", "locked", "deps", "attestation") if k in meta}
+            if not mini.get("deps"):
+                mini.pop("deps", None)
+            if not (mini.get("attestation") or {}).get("count"):
+                mini.pop("attestation", None)  # nothing attested yet
+            src = info.source if covers else body_src
+            src = src if src.endswith("\n") else src + "\n"
+            what = ("full source (the focus covers the module)" if covers
+                    else f"focus {list(focus)!r}, rest as skeletons" if focus else "pure skeleton")
+            return (f"---\n{yaml.safe_dump(mini, sort_keys=False, default_flow_style=False)}---\n\n"
+                    f"# {info.node_id}\n\n`{info.path}`, compact header: {what}.\n\n```{fence}\n{src}```\n")
     body = (
         f"# {info.node_id}\n\n"
         f"Compacted OKF frame for `{info.path}` — "
@@ -711,7 +739,7 @@ def _exception_name(raise_stmt: ast.Raise) -> str | None:
     return exc.id if isinstance(exc, ast.Name) else None
 
 
-def mine_guard_invariants(tree: ast.Module) -> list[str]:
+def mine_guard_invariants(tree: ast.Module, covered: set | None = None) -> list[str]:
     """For every top-level function (sync or async) whose body opens with guard
     clauses (`if <cond on one parameter>: raise <Exc>`), synthesize a callable
     invariant `call:fn(param=value, …) raises Exc` with arguments that trip
@@ -762,8 +790,133 @@ def mine_guard_invariants(tree: ast.Module) -> list[str]:
                     inv = f"call:{fn.name}({', '.join(args)}) raises {exc}"
                     if inv not in out:
                         out.append(inv)
+                    if covered is not None:  # (function, guard test) this call: invariant exercises
+                        covered.add((fn.name, ast.unparse(stmt.test)))
             tested_before |= tested_here
     return out
+
+
+# ------------------------------------------- structural Python guard mining
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _py_symbols(body: list[ast.stmt], prefix: str = ""):
+    """(dotted symbol, def node) for every function and method, nested scopes
+    included and chained by name: `Outer.Inner.m`, and a class or helper defined
+    inside a function as `fn.Inner.m` / `fn.helper` (flask's
+    attach_enctype_error_multidict keeps its guards in such a class)."""
+    for stmt in _scopes_in(body):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield f"{prefix}{stmt.name}", stmt
+            yield from _py_symbols(stmt.body, f"{prefix}{stmt.name}.")
+        elif isinstance(stmt, ast.ClassDef):
+            yield from _py_symbols(stmt.body, f"{prefix}{stmt.name}.")
+
+
+def _own_nodes(stmts: list[ast.stmt]):
+    """Every AST node under `stmts` that belongs to this scope: nested defs,
+    classes and lambdas are their own symbols (or anonymous) and are skipped."""
+    stack = list(reversed(stmts))
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed([c for c in ast.iter_child_nodes(node) if not isinstance(c, _SCOPES)]))
+
+
+def _scopes_in(stmts: list[ast.stmt]):
+    """The defs and classes directly owned by this scope, in source order — also
+    those under `if` / `try` / `with` blocks — without entering them."""
+    stack = list(reversed(stmts))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield node
+        elif not isinstance(node, ast.Lambda):
+            stack.extend(reversed(list(ast.iter_child_nodes(node))))
+
+
+def _raised(stmt: ast.Raise) -> str:
+    exc = stmt.exc.func if isinstance(stmt.exc, ast.Call) else stmt.exc
+    return ast.unparse(exc) if exc is not None else "<re-raise>"
+
+
+def _early_value(stmt: ast.Return) -> str | None:
+    """The normalized value of a constant / None / empty-container return, else None."""
+    v = stmt.value
+    if v is None:
+        return "None"
+    if isinstance(v, ast.Constant) or (
+        isinstance(v, (ast.List, ast.Tuple, ast.Set)) and not v.elts
+    ) or (isinstance(v, ast.Dict) and not v.keys):
+        return ast.unparse(v)
+    return None
+
+
+def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, leading_returns_only: bool) -> list[str]:
+    """The guard clauses of one def, normalized (`ast.unparse`: whitespace, quotes,
+    parentheses and messages never matter):
+      `if <cond> raises <Exc>`   — any `if` whose branch ends in `raise`, at any depth;
+      `assert <cond>`            — any assert;
+      `if <cond> returns <v>`    — an early return of a constant / None / empty
+                                   container (leading run only when mining);
+      `except <T> raises <Exc>`  — a handler that raises (`<re-raise>` for bare raise)."""
+    out: list[str] = []
+    seen: dict[str, int] = {}
+
+    def add(g: str) -> None:
+        # A clause that repeats (two handlers both `except ImportError raises …`) is
+        # numbered, so losing one copy is still a missing invariant.
+        seen[g] = seen.get(g, 0) + 1
+        out.append(g if seen[g] == 1 else f"{g} #{seen[g]}")
+
+    body = fn.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+        body = body[1:]
+    leading: set[int] = set()
+    for stmt in body:
+        if isinstance(stmt, ast.Assert) or (
+            isinstance(stmt, ast.If) and stmt.body and isinstance(stmt.body[-1], (ast.Raise, ast.Return))
+        ):
+            leading.add(id(stmt))
+            continue
+        break
+    for node in _own_nodes(body):
+        if isinstance(node, ast.If) and node.body:
+            last = node.body[-1]
+            if isinstance(last, ast.Raise):
+                add(f"if {ast.unparse(node.test)} raises {_raised(last)}")
+            elif (isinstance(last, ast.Return) and len(node.body) == 1 and not node.orelse
+                  and (not leading_returns_only or id(node) in leading)
+                  and (value := _early_value(last)) is not None):
+                add(f"if {ast.unparse(node.test)} returns {value}")
+        elif isinstance(node, ast.Assert):
+            add(f"assert {ast.unparse(node.test)}")
+        elif isinstance(node, ast.ExceptHandler):
+            caught = ast.unparse(node.type) if node.type is not None else "*"
+            for sub in _own_nodes(node.body):
+                if isinstance(sub, ast.Raise):
+                    add(f"except {caught} raises {_raised(sub)}")
+    return out
+
+
+def mine_structural_guards(tree: ast.Module) -> list[str]:
+    """`guard:<Symbol>:<clause>` for every guard clause (see `_py_guards`) of every
+    top-level function and class method — no runtime argument synthesis, so
+    methods, external types (`isinstance(x, CookieJar)`), asserts and non-leading
+    checks are covered. Gate C requires each one to stay structurally present
+    in its symbol's body unless the commit declares the deletion. A leading guard
+    the runtime miner already exercises (`call:fn(…) raises Exc`) is left to that
+    semantic check, so an equivalent rewrite of its condition still passes."""
+    covered: set = set()
+    mine_guard_invariants(tree, covered)
+    return [f"guard:{sym}:{g}" for sym, fn in _py_symbols(tree.body) for g in _py_guards(fn, True)
+            if not any(sym == name and g.startswith(f"if {test} raises ") for name, test in covered)]
+
+
+def present_structural_guards(tree: ast.Module) -> set[str]:
+    """Every Python `guard:` clause present anywhere in each symbol's body."""
+    return {f"guard:{sym}:{g}" for sym, fn in _py_symbols(tree.body) for g in _py_guards(fn, False)}
 
 
 # ------------------------------------- deterministic branch invariant mining
@@ -1057,16 +1210,18 @@ def _import_records(
     node_id: str, path: str, tree: ast.Module, modules: dict[str, str]
 ) -> list[tuple[str, str | None, str | None]]:
     """(dep node_id, name imported from it or None for the module object itself,
-    local binding) for every top-level import resolving to another project module.
+    local binding) for every import resolving to another project module — at any
+    nesting depth: function-scoped (lazy) imports, `if TYPE_CHECKING:` blocks and
+    `try: … except ImportError:` fallbacks are dependencies too.
     Relative imports resolve against the importing file's package."""
     package = _package_of(path)
     out: list[tuple[str, str | None, str | None]] = []
 
     def add(nid: str | None, name: str | None, local: str | None) -> None:
-        if nid is not None and nid != node_id:
+        if nid is not None and nid != node_id and (nid, name, local) not in out:
             out.append((nid, name, local))
 
-    for stmt in tree.body:
+    for stmt in ast.walk(tree):
         if isinstance(stmt, ast.Import):
             for alias in stmt.names:
                 nid, _exact = _lookup(alias.name, modules)
@@ -1472,4 +1627,9 @@ def present_guards(source: str, path: str | None = None) -> set[str]:
     """Every `guard:<symbol>:<cond> <effect>` structurally present in `source`
     (at any depth of the symbol's body), for Gate C's conservation check."""
     mod = (lang_module(path) if path else None) or foreign_module(source)
-    return set(mod.present_guards(source)) if mod is not None and hasattr(mod, "present_guards") else set()
+    if mod is None:
+        try:
+            return present_structural_guards(ast.parse(source))
+        except SyntaxError:
+            return set()
+    return set(mod.present_guards(source)) if hasattr(mod, "present_guards") else set()

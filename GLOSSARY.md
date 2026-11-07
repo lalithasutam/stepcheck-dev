@@ -22,7 +22,8 @@ each node once).
 stems collide (several `__init__.py`, `pkg/models.py` + `other/models.py`) the colliding files use
 their dotted relative path (`kernel.__init__`, `other.models`). `deps[]` are resolved through
 packages: absolute and relative imports (`from . import _gates`, `from kernel import StateKernel`)
-both land on the right node, and Gate A checks the names a dependent imports against the staged
+both land on the right node — at any nesting depth: a **lazy import** inside a function, an
+`if TYPE_CHECKING:` block or a `try: … except ImportError:` fallback is a dependency too — and Gate A checks the names a dependent imports against the staged
 module's top-level bindings. Gate C loads a package module as a package, so its relative imports
 resolve to canonical sources. **Source roots:** a session rooted at the repository also resolves
 names relative to a first-level directory that code puts on `sys.path` (`src/`, `backend/`): with
@@ -48,7 +49,11 @@ invariants that constrain the edit, and `token_count`. Hard budget: `token_count
 Never contains unrelated sibling frames. An unfocused checkout whose frame would meet the
 budget auto-falls back to a pure skeleton + symbol index (`auto_skeletonized=True`). Superseded attestations fold into one
 `attestation: {count, latest_sha256, latest_turn}` summary in the payload; the on-disk frame
-keeps the append-only `verified[]` chain.
+keeps the append-only `verified[]` chain. **Compact header:** when a focused checkout's cone
+covers every top-level symbol (the frame is the whole module, served verbatim) or the full header
+would outweigh the file, the frontmatter shrinks to `node_id, path, status, locked` (+ `deps`,
+`attestation` when non-empty); everything dropped is still enforced at the gates. Empty
+dependency / invariant sections are omitted from the payload.
 
 **Focus / AST skeleton** — `checkout(…, focus=[names])` serves the named top-level defs
 verbatim (comments included) and every other def/class as decorators + signature + docstring +
@@ -103,7 +108,10 @@ Failure: `MechanicalError`. `verified[]` untouched on rejection.
 
 **Gate B — Omission:** AST symbol fingerprinting. Rejects (1) dropped `preserved_symbols[]`
 (`INTRA_NODE_SYMBOL_DROPPED`), (2) >15% AST-statement shrinkage without `allow_deletion=True`
-(`INTRA_NODE_MASS_DELETION`). On an *accepted* export-signature change, downstream dependents
+(`INTRA_NODE_MASS_DELETION`) — for Python only when the shrink also loses a **binding** (a def,
+class, method, or module- / class-level assigned name) or changes an exported signature: a
+**concise refactor** that keeps every binding, stubs no body and keeps every Gate C guard passes.
+On an *accepted* export-signature change, downstream dependents
 transition to `DIRTY_OMISSION_RISK` (`INTER_NODE_DIRTY` propagation). Failure: `OmissionError`.
 
 **Gate C — Logical, Attestation, Telemetry:** every `invariants[]` expression must hold
@@ -117,7 +125,17 @@ synthesized `call:fn(param=value, …) raises Exc` invariant (listed in `invaria
 de-duplicated against hand-written ones, re-mined on every accepted commit). Mined guards are
 waived by `allow_deletion=True`; hand-written invariants never are. When the staged signature
 gains required parameters, a mined `call:` invariant is evaluated with typed mocks for them, so
-the guard is still exercised (hand-written calls are never filled in). Namespace loading and every evaluation run under an
+the guard is still exercised (hand-written calls are never filled in). **Structural guard
+invariants** (`guard:<Symbol>:<clause>`, Python as well as TS / Go / Rust / Java) need no runtime
+arguments, so they cover what `call:` mining cannot — methods (`Class.method`), nested scopes
+(`fn.Inner.m`), external types (`isinstance(x, CookieJar)`): every `if <cond> raises <Exc>` at any
+depth, every `assert <cond>`, a leading `if <cond> returns <const / None / empty>`, and every
+`except <T> raises <Exc>` handler. Clauses are normalized with `ast.unparse` (messages, quotes,
+parentheses never matter) and a repeated clause is numbered (`… #2`). Gate C requires each to stay
+present anywhere in its symbol's body, after the executable invariants run; a leading guard the
+`call:` miner already exercises is left to that semantic check, so an equivalent rewrite passes.
+A focused checkout lists only the focus's guards (frontmatter `guard_invariants: N` counts all).
+Namespace loading and every evaluation run under an
 execution guard (200k line-event steps / 0.5 s backstop); overrun is a deterministic
 `LogicalError`. On pass, write the source to the tracked file (UTF-8, keeping the file's BOM and
 line endings; a file changed on disk since the kernel last read it is a `MechanicalError` and is
