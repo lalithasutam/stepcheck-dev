@@ -44,6 +44,12 @@ another process rewrote (newer `mtime_ns`, bytes not this process's own last wri
 The gateway runs it before every `/v1/…` and `/mcp` request, so a long-lived daemon never answers
 the Stop hook from a session already archived on disk.
 
+**Hook offline fast path** — The installed lifecycle hook (`stepcheck hooks`) detects an offline
+gateway with a 15 ms loopback connect probe before importing anything beyond the standard library.
+A PreToolUse on a non-editing tool (Read) then exits at once — tens of milliseconds of hook time,
+`STEPCHECK_HOOK_TRACE=1` prints it — while an editing tool, PostToolUse and Stop still run the
+in-process gates: a dead socket never lets a broken write through.
+
 **StateKernel** — The single deep module behind Seam 1. Owns OKF compilation, sessions,
 checkout/commit, the three gates, locking, attestation, and telemetry. Everything else in
 `backend/kernel/` is private implementation (`_`-prefixed modules), not interface.
@@ -58,11 +64,18 @@ keeps the append-only `verified[]` chain. **Compact header:** when a focused che
 covers every top-level symbol (the frame is the whole module, served verbatim) or the full header
 would outweigh the file, the frontmatter shrinks to `node_id, path, status, locked` (+ `deps`,
 `attestation` when non-empty); everything dropped is still enforced at the gates. Empty
-dependency / invariant sections are omitted from the payload. **Pragma bypass (zero inflation):**
-when the focus covers every symbol of the module and even the compact frame would cost more
-tokens than the raw source, the payload is one comment line — `# [stepcheck: <node_id> | <status>
-| invariants: N enforced]` (`//` outside Python) — followed by the source verbatim; `rendered()`
-returns exactly that. The overhead is that one line, never a frame.
+dependency / invariant sections are omitted from the payload. **Zero-bloat floor:** a focused or
+skeleton checkout (`focus` given, `[]` included) never costs more than the file it slices when
+there is a cheaper honest view. When the full frame would, the frontmatter and prose go and the
+frame becomes one pragma line — `# [stepcheck: <node_id> | <status> | invariants: N enforced |
+callees: …]` (`//` outside Python) — over the sliced body in a code fence, still followed by the
+dependency interfaces and the `## Locked invariants` list (the only way a Door 1 or hook reader
+sees them). When the focus and its cone cover the whole module there is nothing left to hide and
+the payload is the bare source, exactly `raw` tokens (`CheckoutPayload.pragma=True`; the deps
+keep their signatures in `dependency_signatures`). A partial focus is never expanded to the whole
+file: it stays sliced even when its stubs, cone and interfaces outweigh the few lines they hide.
+The full frame (`focus=None`) is never floored, and a frame at or over the 4,000-token budget
+takes the budget ladder instead.
 
 **Focus / AST skeleton** — `checkout(…, focus=[names])` serves the named top-level defs
 verbatim (comments included) and every other def/class as decorators + signature + docstring +
@@ -94,8 +107,9 @@ bytes still hash to what the session last attested, Gates A/B/C run on it in mem
 new state and, on a pass, its attestation is refreshed (`CommitVerdict.reverified[]`). Purely
 additive changes therefore dirty nothing. TS / Go / Rust / Java use the same per-name contract,
 read from the export signatures (`Class.member` counts as `Class`; Go names are the identifiers
-read off the package alias, `ledger.Open`); an export whose name cannot be parsed (`default`)
-breaks every importer. A locked dependent that is dirtied clears by re-committing its locked bytes
+read off the package alias, `ledger.Open`; a Java file's same-package references — the type name
+of a sibling file in its directory used as an identifier, no `import` needed — are edges on that
+name); an export whose name cannot be parsed (`default`) breaks every importer. A locked dependent that is dirtied clears by re-committing its locked bytes
 unchanged (see Gate A).
 
 **TokenFirewall** — Door 1 of the gateway: the BYOK proxy that intercepts bloated `messages[]`,
@@ -128,6 +142,12 @@ class, method, or module- / class-level assigned name) or changes an exported si
 **concise refactor** that keeps every binding, stubs no body and keeps every Gate C guard passes.
 On an *accepted* export-signature change, downstream dependents
 transition to `DIRTY_OMISSION_RISK` (`INTER_NODE_DIRTY` propagation). Failure: `OmissionError`.
+**Dead-symbol rule (strict mode):** a dropped Python `def X` / `class X` passes without
+`allow_deletion` when the name occurs nowhere in the staged module (name, attribute, definition or
+string), nowhere in any dependent's source, and the module still exports something — removing or
+renaming dead code is a refactor, not an omission (Gate C then does not ask for that symbol's
+guards either). A decorator fingerprint (`@dec on X`) or an internal call (`call:X`) is never dead
+this way: those are the silent drops.
 
 **Gate C — Logical, Attestation, Telemetry:** every `invariants[]` expression must hold
 (failure: `LogicalError`). Each evaluates with `src` (= `ast.unparse(tree)`: normalized,
@@ -144,11 +164,17 @@ the guard is still exercised (hand-written calls are never filled in). **Structu
 invariants** (`guard:<Symbol>:<clause>`, Python as well as TS / Go / Rust / Java) need no runtime
 arguments, so they cover what `call:` mining cannot — methods (`Class.method`), nested scopes
 (`fn.Inner.m`), external types (`isinstance(x, CookieJar)`): every `if <cond> raises <Exc>` at any
-depth, every `assert <cond>`, a leading `if <cond> returns <const / None / empty>`, a leading
-`if <cond> returns early` when the returned value is computed (the condition is pinned, the
-expression may be refactored), every `except <T> raises <Exc>` handler, and `<obj>.get('<key>')
-has default` for a `.get('<key>', <literal other than None>)` (any default keeps it; a bare
-`<obj>['<key>']` subscript drops it). Clauses are normalized with `ast.unparse` (messages, quotes,
+depth, every `assert <cond>`, `if <cond> returns <const / None / empty>` and `if <cond> returns
+early` (a computed value: the condition is pinned, the expression may be refactored) for every
+`if` that is a direct branch of the def — not one inside a loop, `with` or `try`, which is control
+flow — `else raises <Exc>` for an if / elif chain whose final `else` raises (one clause per chain,
+so branches may be added), every `except <T> raises <Exc>` handler, and `<obj>.get(<key>) has
+default` for any two-argument `.get(key, default)` (any key, any default; a `.get(key)` keeps it,
+a bare `<obj>[<key>]` subscript drops it). **Assert waivers (strict mode):** a missing `assert
+<cond>` is accepted when a variable it read no longer exists anywhere in the module (renamed or
+removed in the same refactor) or when the def now carries the equivalent `if not <cond>: raise …`
+(a flipped comparison counts); a live assertion deleted outright, or weakened in place, is still
+rejected. Clauses are normalized with `ast.unparse` (messages, quotes,
 parentheses never matter) and a repeated clause is numbered (`… #2`). Gate C requires each to stay
 present anywhere in its symbol's body, after the executable invariants run; a leading guard the
 `call:` miner already exercises is left to that semantic check, so an equivalent rewrite passes.

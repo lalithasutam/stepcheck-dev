@@ -451,7 +451,7 @@
           "code": "def _step_8(x: int) -> int:\n    return x + 8\n"
         }
       ],
-      "checkout_tokens": 230,
+      "checkout_tokens": 123,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -498,8 +498,8 @@
         ]
       },
       "raw": 11787,
-      "compacted": 2006,
-      "dollars": 0.0293,
+      "compacted": 1899,
+      "dollars": 0.0297,
       "omissions_blocked": 0
     },
     {
@@ -559,8 +559,8 @@
         ]
       },
       "raw": 13994,
-      "compacted": 2213,
-      "dollars": 0.0353,
+      "compacted": 2106,
+      "dollars": 0.0357,
       "omissions_blocked": 0
     },
     {
@@ -622,8 +622,8 @@
         ]
       },
       "raw": 16213,
-      "compacted": 2452,
-      "dollars": 0.0413,
+      "compacted": 2345,
+      "dollars": 0.0416,
       "omissions_blocked": 0
     },
     {
@@ -692,8 +692,8 @@
         ]
       },
       "raw": 18444,
-      "compacted": 2807,
-      "dollars": 0.0469,
+      "compacted": 2700,
+      "dollars": 0.0472,
       "omissions_blocked": 0
     },
     {
@@ -754,8 +754,8 @@
         ]
       },
       "raw": 20687,
-      "compacted": 3085,
-      "dollars": 0.0528,
+      "compacted": 2978,
+      "dollars": 0.0531,
       "omissions_blocked": 0
     },
     {
@@ -768,7 +768,7 @@
           "code": "def _step_13(x: int) -> int:\n    return x + 13\n"
         }
       ],
-      "checkout_tokens": 240,
+      "checkout_tokens": 133,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -815,8 +815,8 @@
         ]
       },
       "raw": 22942,
-      "compacted": 3325,
-      "dollars": 0.0589,
+      "compacted": 3111,
+      "dollars": 0.0595,
       "omissions_blocked": 0
     },
     {
@@ -876,8 +876,8 @@
         ]
       },
       "raw": 25209,
-      "compacted": 3542,
-      "dollars": 0.065,
+      "compacted": 3328,
+      "dollars": 0.0656,
       "omissions_blocked": 0
     },
     {
@@ -939,8 +939,8 @@
         ]
       },
       "raw": 27488,
-      "compacted": 3791,
-      "dollars": 0.0711,
+      "compacted": 3577,
+      "dollars": 0.0717,
       "omissions_blocked": 0
     },
     {
@@ -1009,8 +1009,8 @@
         ]
       },
       "raw": 29779,
-      "compacted": 4156,
-      "dollars": 0.0769,
+      "compacted": 3942,
+      "dollars": 0.0775,
       "omissions_blocked": 0
     },
     {
@@ -1071,8 +1071,8 @@
         ]
       },
       "raw": 32082,
-      "compacted": 4444,
-      "dollars": 0.0829,
+      "compacted": 4230,
+      "dollars": 0.0836,
       "omissions_blocked": 0
     },
     {
@@ -1132,8 +1132,8 @@
         ]
       },
       "raw": 34397,
-      "compacted": 4694,
-      "dollars": 0.0891,
+      "compacted": 4480,
+      "dollars": 0.0898,
       "omissions_blocked": 0
     },
     {
@@ -1193,8 +1193,8 @@
         ]
       },
       "raw": 36725,
-      "compacted": 4921,
-      "dollars": 0.0954,
+      "compacted": 4707,
+      "dollars": 0.0961,
       "omissions_blocked": 0
     },
     {
@@ -1210,7 +1210,7 @@
           "code": "def charge(account: str, amount_cents: int) -> dict:\n    if amount_cents <= 0:\n        raise ValueError(\"amount must be positive\")\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00)}\n"
         }
       ],
-      "checkout_tokens": 510,
+      "checkout_tokens": 288,
       "accepted": false,
       "gate": "B",
       "subtype": "INTRA_NODE_SYMBOL_DROPPED",
@@ -1266,8 +1266,8 @@
         ]
       },
       "raw": 39065,
-      "compacted": 5431,
-      "dollars": 0.1009,
+      "compacted": 4995,
+      "dollars": 0.1022,
       "omissions_blocked": 1
     },
     {
@@ -1336,8 +1336,8 @@
         ]
       },
       "raw": 41417,
-      "compacted": 5815,
-      "dollars": 0.1068,
+      "compacted": 5379,
+      "dollars": 0.1081,
       "omissions_blocked": 1
     },
     {
@@ -1398,8 +1398,8 @@
         ]
       },
       "raw": 43782,
-      "compacted": 6112,
-      "dollars": 0.113,
+      "compacted": 5676,
+      "dollars": 0.1143,
       "omissions_blocked": 1
     },
     {
@@ -1459,8 +1459,8 @@
         ]
       },
       "raw": 46160,
-      "compacted": 6371,
-      "dollars": 0.1194,
+      "compacted": 5935,
+      "dollars": 0.1207,
       "omissions_blocked": 1
     },
     {
@@ -1520,8 +1520,8 @@
         ]
       },
       "raw": 48550,
-      "compacted": 6608,
-      "dollars": 0.1258,
+      "compacted": 6172,
+      "dollars": 0.1271,
       "omissions_blocked": 1
     },
     {
@@ -1537,7 +1537,7 @@
           "code": "@audit\ndef charge(account: str, amount_cents: int, currency: str = \"USD\") -> dict:\n    if amount_cents <= 0:\n        raise ValueError(\"amount must be positive\")\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00), \"currency\": currency}\n"
         }
       ],
-      "checkout_tokens": 529,
+      "checkout_tokens": 308,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -1596,8 +1596,8 @@
         ]
       },
       "raw": 50952,
-      "compacted": 7137,
-      "dollars": 0.1314,
+      "compacted": 6480,
+      "dollars": 0.1334,
       "omissions_blocked": 1
     },
     {
@@ -1658,8 +1658,8 @@
         ]
       },
       "raw": 53365,
-      "compacted": 7452,
-      "dollars": 0.1377,
+      "compacted": 6795,
+      "dollars": 0.1397,
       "omissions_blocked": 1
     },
     {
@@ -1672,7 +1672,7 @@
           "code": "def _step_27(x: int) -> int:\n    return x + 27\n"
         }
       ],
-      "checkout_tokens": 277,
+      "checkout_tokens": 170,
       "accepted": true,
       "gate": null,
       "subtype": null,
@@ -1719,8 +1719,8 @@
         ]
       },
       "raw": 55790,
-      "compacted": 7729,
-      "dollars": 0.1442,
+      "compacted": 6965,
+      "dollars": 0.1465,
       "omissions_blocked": 1
     },
     {
@@ -1780,8 +1780,8 @@
         ]
       },
       "raw": 58227,
-      "compacted": 8013,
-      "dollars": 0.1506,
+      "compacted": 7249,
+      "dollars": 0.1529,
       "omissions_blocked": 1
     },
     {
@@ -1841,8 +1841,8 @@
         ]
       },
       "raw": 60676,
-      "compacted": 8259,
-      "dollars": 0.1573,
+      "compacted": 7495,
+      "dollars": 0.1595,
       "omissions_blocked": 1
     },
     {
@@ -1904,8 +1904,8 @@
         ]
       },
       "raw": 63138,
-      "compacted": 8518,
-      "dollars": 0.1639,
+      "compacted": 7754,
+      "dollars": 0.1662,
       "omissions_blocked": 1
     },
     {
@@ -1974,8 +1974,8 @@
         ]
       },
       "raw": 65613,
-      "compacted": 8923,
-      "dollars": 0.1701,
+      "compacted": 8159,
+      "dollars": 0.1724,
       "omissions_blocked": 1
     },
     {
@@ -2036,8 +2036,8 @@
         ]
       },
       "raw": 68100,
-      "compacted": 9245,
-      "dollars": 0.1766,
+      "compacted": 8481,
+      "dollars": 0.1789,
       "omissions_blocked": 1
     },
     {
@@ -2097,8 +2097,8 @@
         ]
       },
       "raw": 70599,
-      "compacted": 9539,
-      "dollars": 0.1832,
+      "compacted": 8775,
+      "dollars": 0.1855,
       "omissions_blocked": 1
     },
     {
@@ -2158,8 +2158,8 @@
         ]
       },
       "raw": 73111,
-      "compacted": 9795,
-      "dollars": 0.1899,
+      "compacted": 9031,
+      "dollars": 0.1922,
       "omissions_blocked": 1
     },
     {
@@ -2175,7 +2175,7 @@
           "code": "@audit\ndef charge(account: str, amount_cents: int, currency: str = \"USD\") -> dict:\n    if amount_cents == 0:\n        amount_cents = 1\n    key = account_key(account)\n    return {\"account\": key, \"amount_cents\": clamp(amount_cents, 1, 10_000_00), \"currency\": currency}\n"
         }
       ],
-      "checkout_tokens": 556,
+      "checkout_tokens": 329,
       "accepted": false,
       "gate": "C",
       "subtype": null,
@@ -2231,8 +2231,8 @@
         ]
       },
       "raw": 75635,
-      "compacted": 10351,
-      "dollars": 0.1959,
+      "compacted": 9360,
+      "dollars": 0.1988,
       "omissions_blocked": 2
     },
     {
@@ -2277,8 +2277,8 @@
       "auto_mined_catch": false,
       "attestation": null,
       "raw": 78573,
-      "compacted": 10549,
-      "dollars": 0.2041,
+      "compacted": 9558,
+      "dollars": 0.207,
       "omissions_blocked": 2
     },
     {
@@ -2339,8 +2339,8 @@
         ]
       },
       "raw": 81511,
-      "compacted": 10881,
-      "dollars": 0.2119,
+      "compacted": 9890,
+      "dollars": 0.2149,
       "omissions_blocked": 2
     },
     {
@@ -2400,8 +2400,8 @@
         ]
       },
       "raw": 84461,
-      "compacted": 11185,
-      "dollars": 0.2198,
+      "compacted": 10194,
+      "dollars": 0.2228,
       "omissions_blocked": 2
     },
     {
@@ -2461,8 +2461,8 @@
         ]
       },
       "raw": 87423,
-      "compacted": 11451,
-      "dollars": 0.2279,
+      "compacted": 10460,
+      "dollars": 0.2309,
       "omissions_blocked": 2
     },
     {
@@ -2524,8 +2524,8 @@
         ]
       },
       "raw": 90397,
-      "compacted": 11720,
-      "dollars": 0.236,
+      "compacted": 10729,
+      "dollars": 0.239,
       "omissions_blocked": 2
     },
     {
@@ -2594,8 +2594,8 @@
         ]
       },
       "raw": 93383,
-      "compacted": 12144,
-      "dollars": 0.2437,
+      "compacted": 11153,
+      "dollars": 0.2467,
       "omissions_blocked": 2
     },
     {
@@ -2656,8 +2656,8 @@
         ]
       },
       "raw": 96382,
-      "compacted": 12486,
-      "dollars": 0.2517,
+      "compacted": 11495,
+      "dollars": 0.2547,
       "omissions_blocked": 2
     },
     {
@@ -2717,8 +2717,8 @@
         ]
       },
       "raw": 99394,
-      "compacted": 12800,
-      "dollars": 0.2598,
+      "compacted": 11809,
+      "dollars": 0.2628,
       "omissions_blocked": 2
     },
     {
@@ -2778,8 +2778,8 @@
         ]
       },
       "raw": 102418,
-      "compacted": 13076,
-      "dollars": 0.268,
+      "compacted": 12085,
+      "dollars": 0.271,
       "omissions_blocked": 2
     },
     {
@@ -2841,8 +2841,8 @@
         ]
       },
       "raw": 105454,
-      "compacted": 13355,
-      "dollars": 0.2763,
+      "compacted": 12364,
+      "dollars": 0.2793,
       "omissions_blocked": 2
     },
     {
@@ -2911,8 +2911,8 @@
         ]
       },
       "raw": 108502,
-      "compacted": 13789,
-      "dollars": 0.2841,
+      "compacted": 12798,
+      "dollars": 0.2871,
       "omissions_blocked": 2
     },
     {
@@ -2973,8 +2973,8 @@
         ]
       },
       "raw": 111562,
-      "compacted": 14141,
-      "dollars": 0.2923,
+      "compacted": 13150,
+      "dollars": 0.2952,
       "omissions_blocked": 2
     },
     {
@@ -3034,8 +3034,8 @@
         ]
       },
       "raw": 114634,
-      "compacted": 14465,
-      "dollars": 0.3005,
+      "compacted": 13474,
+      "dollars": 0.3035,
       "omissions_blocked": 2
     },
     {
@@ -3095,8 +3095,8 @@
         ]
       },
       "raw": 117718,
-      "compacted": 14751,
-      "dollars": 0.3089,
+      "compacted": 13760,
+      "dollars": 0.3119,
       "omissions_blocked": 2
     },
     {
@@ -3158,8 +3158,8 @@
         ]
       },
       "raw": 120815,
-      "compacted": 15039,
-      "dollars": 0.3173,
+      "compacted": 14048,
+      "dollars": 0.3203,
       "omissions_blocked": 2
     }
   ],
@@ -3269,303 +3269,303 @@
     {
       "turn": 8,
       "raw": 11787,
-      "compacted": 2006,
-      "saved": 9781,
-      "dollars": 0.0293
+      "compacted": 1899,
+      "saved": 9888,
+      "dollars": 0.0297
     },
     {
       "turn": 9,
       "raw": 13994,
-      "compacted": 2213,
-      "saved": 11781,
-      "dollars": 0.0353
+      "compacted": 2106,
+      "saved": 11888,
+      "dollars": 0.0357
     },
     {
       "turn": 10,
       "raw": 16213,
-      "compacted": 2452,
-      "saved": 13761,
-      "dollars": 0.0413
+      "compacted": 2345,
+      "saved": 13868,
+      "dollars": 0.0416
     },
     {
       "turn": 11,
       "raw": 18444,
-      "compacted": 2807,
-      "saved": 15637,
-      "dollars": 0.0469
+      "compacted": 2700,
+      "saved": 15744,
+      "dollars": 0.0472
     },
     {
       "turn": 12,
       "raw": 20687,
-      "compacted": 3085,
-      "saved": 17602,
-      "dollars": 0.0528
+      "compacted": 2978,
+      "saved": 17709,
+      "dollars": 0.0531
     },
     {
       "turn": 13,
       "raw": 22942,
-      "compacted": 3325,
-      "saved": 19617,
-      "dollars": 0.0589
+      "compacted": 3111,
+      "saved": 19831,
+      "dollars": 0.0595
     },
     {
       "turn": 14,
       "raw": 25209,
-      "compacted": 3542,
-      "saved": 21667,
-      "dollars": 0.065
+      "compacted": 3328,
+      "saved": 21881,
+      "dollars": 0.0656
     },
     {
       "turn": 15,
       "raw": 27488,
-      "compacted": 3791,
-      "saved": 23697,
-      "dollars": 0.0711
+      "compacted": 3577,
+      "saved": 23911,
+      "dollars": 0.0717
     },
     {
       "turn": 16,
       "raw": 29779,
-      "compacted": 4156,
-      "saved": 25623,
-      "dollars": 0.0769
+      "compacted": 3942,
+      "saved": 25837,
+      "dollars": 0.0775
     },
     {
       "turn": 17,
       "raw": 32082,
-      "compacted": 4444,
-      "saved": 27638,
-      "dollars": 0.0829
+      "compacted": 4230,
+      "saved": 27852,
+      "dollars": 0.0836
     },
     {
       "turn": 18,
       "raw": 34397,
-      "compacted": 4694,
-      "saved": 29703,
-      "dollars": 0.0891
+      "compacted": 4480,
+      "saved": 29917,
+      "dollars": 0.0898
     },
     {
       "turn": 19,
       "raw": 36725,
-      "compacted": 4921,
-      "saved": 31804,
-      "dollars": 0.0954
+      "compacted": 4707,
+      "saved": 32018,
+      "dollars": 0.0961
     },
     {
       "turn": 20,
       "raw": 39065,
-      "compacted": 5431,
-      "saved": 33634,
-      "dollars": 0.1009
+      "compacted": 4995,
+      "saved": 34070,
+      "dollars": 0.1022
     },
     {
       "turn": 21,
       "raw": 41417,
-      "compacted": 5815,
-      "saved": 35602,
-      "dollars": 0.1068
+      "compacted": 5379,
+      "saved": 36038,
+      "dollars": 0.1081
     },
     {
       "turn": 22,
       "raw": 43782,
-      "compacted": 6112,
-      "saved": 37670,
-      "dollars": 0.113
+      "compacted": 5676,
+      "saved": 38106,
+      "dollars": 0.1143
     },
     {
       "turn": 23,
       "raw": 46160,
-      "compacted": 6371,
-      "saved": 39789,
-      "dollars": 0.1194
+      "compacted": 5935,
+      "saved": 40225,
+      "dollars": 0.1207
     },
     {
       "turn": 24,
       "raw": 48550,
-      "compacted": 6608,
-      "saved": 41942,
-      "dollars": 0.1258
+      "compacted": 6172,
+      "saved": 42378,
+      "dollars": 0.1271
     },
     {
       "turn": 25,
       "raw": 50952,
-      "compacted": 7137,
-      "saved": 43815,
-      "dollars": 0.1314
+      "compacted": 6480,
+      "saved": 44472,
+      "dollars": 0.1334
     },
     {
       "turn": 26,
       "raw": 53365,
-      "compacted": 7452,
-      "saved": 45913,
-      "dollars": 0.1377
+      "compacted": 6795,
+      "saved": 46570,
+      "dollars": 0.1397
     },
     {
       "turn": 27,
       "raw": 55790,
-      "compacted": 7729,
-      "saved": 48061,
-      "dollars": 0.1442
+      "compacted": 6965,
+      "saved": 48825,
+      "dollars": 0.1465
     },
     {
       "turn": 28,
       "raw": 58227,
-      "compacted": 8013,
-      "saved": 50214,
-      "dollars": 0.1506
+      "compacted": 7249,
+      "saved": 50978,
+      "dollars": 0.1529
     },
     {
       "turn": 29,
       "raw": 60676,
-      "compacted": 8259,
-      "saved": 52417,
-      "dollars": 0.1573
+      "compacted": 7495,
+      "saved": 53181,
+      "dollars": 0.1595
     },
     {
       "turn": 30,
       "raw": 63138,
-      "compacted": 8518,
-      "saved": 54620,
-      "dollars": 0.1639
+      "compacted": 7754,
+      "saved": 55384,
+      "dollars": 0.1662
     },
     {
       "turn": 31,
       "raw": 65613,
-      "compacted": 8923,
-      "saved": 56690,
-      "dollars": 0.1701
+      "compacted": 8159,
+      "saved": 57454,
+      "dollars": 0.1724
     },
     {
       "turn": 32,
       "raw": 68100,
-      "compacted": 9245,
-      "saved": 58855,
-      "dollars": 0.1766
+      "compacted": 8481,
+      "saved": 59619,
+      "dollars": 0.1789
     },
     {
       "turn": 33,
       "raw": 70599,
-      "compacted": 9539,
-      "saved": 61060,
-      "dollars": 0.1832
+      "compacted": 8775,
+      "saved": 61824,
+      "dollars": 0.1855
     },
     {
       "turn": 34,
       "raw": 73111,
-      "compacted": 9795,
-      "saved": 63316,
-      "dollars": 0.1899
+      "compacted": 9031,
+      "saved": 64080,
+      "dollars": 0.1922
     },
     {
       "turn": 35,
       "raw": 75635,
-      "compacted": 10351,
-      "saved": 65284,
-      "dollars": 0.1959
+      "compacted": 9360,
+      "saved": 66275,
+      "dollars": 0.1988
     },
     {
       "turn": 36,
       "raw": 78573,
-      "compacted": 10549,
-      "saved": 68024,
-      "dollars": 0.2041
+      "compacted": 9558,
+      "saved": 69015,
+      "dollars": 0.207
     },
     {
       "turn": 37,
       "raw": 81511,
-      "compacted": 10881,
-      "saved": 70630,
-      "dollars": 0.2119
+      "compacted": 9890,
+      "saved": 71621,
+      "dollars": 0.2149
     },
     {
       "turn": 38,
       "raw": 84461,
-      "compacted": 11185,
-      "saved": 73276,
-      "dollars": 0.2198
+      "compacted": 10194,
+      "saved": 74267,
+      "dollars": 0.2228
     },
     {
       "turn": 39,
       "raw": 87423,
-      "compacted": 11451,
-      "saved": 75972,
-      "dollars": 0.2279
+      "compacted": 10460,
+      "saved": 76963,
+      "dollars": 0.2309
     },
     {
       "turn": 40,
       "raw": 90397,
-      "compacted": 11720,
-      "saved": 78677,
-      "dollars": 0.236
+      "compacted": 10729,
+      "saved": 79668,
+      "dollars": 0.239
     },
     {
       "turn": 41,
       "raw": 93383,
-      "compacted": 12144,
-      "saved": 81239,
-      "dollars": 0.2437
+      "compacted": 11153,
+      "saved": 82230,
+      "dollars": 0.2467
     },
     {
       "turn": 42,
       "raw": 96382,
-      "compacted": 12486,
-      "saved": 83896,
-      "dollars": 0.2517
+      "compacted": 11495,
+      "saved": 84887,
+      "dollars": 0.2547
     },
     {
       "turn": 43,
       "raw": 99394,
-      "compacted": 12800,
-      "saved": 86594,
-      "dollars": 0.2598
+      "compacted": 11809,
+      "saved": 87585,
+      "dollars": 0.2628
     },
     {
       "turn": 44,
       "raw": 102418,
-      "compacted": 13076,
-      "saved": 89342,
-      "dollars": 0.268
+      "compacted": 12085,
+      "saved": 90333,
+      "dollars": 0.271
     },
     {
       "turn": 45,
       "raw": 105454,
-      "compacted": 13355,
-      "saved": 92099,
-      "dollars": 0.2763
+      "compacted": 12364,
+      "saved": 93090,
+      "dollars": 0.2793
     },
     {
       "turn": 46,
       "raw": 108502,
-      "compacted": 13789,
-      "saved": 94713,
-      "dollars": 0.2841
+      "compacted": 12798,
+      "saved": 95704,
+      "dollars": 0.2871
     },
     {
       "turn": 47,
       "raw": 111562,
-      "compacted": 14141,
-      "saved": 97421,
-      "dollars": 0.2923
+      "compacted": 13150,
+      "saved": 98412,
+      "dollars": 0.2952
     },
     {
       "turn": 48,
       "raw": 114634,
-      "compacted": 14465,
-      "saved": 100169,
-      "dollars": 0.3005
+      "compacted": 13474,
+      "saved": 101160,
+      "dollars": 0.3035
     },
     {
       "turn": 49,
       "raw": 117718,
-      "compacted": 14751,
-      "saved": 102967,
-      "dollars": 0.3089
+      "compacted": 13760,
+      "saved": 103958,
+      "dollars": 0.3119
     },
     {
       "turn": 50,
       "raw": 120815,
-      "compacted": 15039,
-      "saved": 105776,
-      "dollars": 0.3173
+      "compacted": 14048,
+      "saved": 106767,
+      "dollars": 0.3203
     }
   ],
   "initial_sources": {
@@ -3608,11 +3608,11 @@
   ],
   "final": {
     "raw_bloated_tokens": 120815,
-    "compacted_okf_tokens": 15039,
-    "tokens_saved": 105776,
-    "dollars_saved": 0.3173,
+    "compacted_okf_tokens": 14048,
+    "tokens_saved": 106767,
+    "dollars_saved": 0.3203,
     "omissions_blocked": 2,
     "kernel_turns": 50,
-    "savings_pct": 87.6
+    "savings_pct": 88.4
   }
 }

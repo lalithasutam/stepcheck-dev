@@ -6,7 +6,8 @@ one level of nested types); annotations travel with their declaration;
 `import a.b.C;` / `import a.b.*;` become edges against the tracked files;
 exported = `public`. Gate C mines leading `if (cond) { throw new X(…); }`
 guards as structural `guard:` invariants. Text blocks (`\"\"\"`) are masked.
-Same-package references without an import are not edges (documented).
+Same-package references need no import in Java, so the type name of another
+tracked file in this file's directory, used as an identifier here, is an edge too.
 """
 from __future__ import annotations
 
@@ -203,6 +204,15 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
         nid = C.match_module(modules, f"{pkg}.{last}", node_id)
         if nid:
             out.setdefault(nid, set()).add(last)
+    # Same-package siblings: `Account` used inside `Ledger.java` next to
+    # `Account.java` is a dependency on the name `Account`, import or not.
+    parts = path.replace("\\", "/").split("/")
+    stem, directory = parts[-1].rsplit(".", 1)[0], ".".join(parts[:-1])
+    ids = {t.text for t in C.tokenize(source, SPEC) if t.kind == "id"}
+    for key, nid in modules.items():
+        other = key.rsplit(".", 1)[-1]
+        if nid != node_id and other != stem and other in ids and ".".join(key.split(".")[:-1]) == directory:
+            out.setdefault(nid, set()).add(other)
     return out
 
 

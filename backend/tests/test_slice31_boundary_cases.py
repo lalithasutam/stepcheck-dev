@@ -84,16 +84,23 @@ def test_locked_module_dirtied_upstream_reverifies_with_its_locked_bytes(kernel,
 
 
 def test_tiny_module_covered_by_focus_is_served_as_pragma_plus_raw_source(kernel, tmp_path):
+    # The zero-bloat floor. A focus that covers the module leaves nothing to hide,
+    # so the payload is the bare source — exactly the raw token count; a partial
+    # focus the OKF frame would outweigh gets a one-line pragma over the slice,
+    # never the whole file.
     src = "def add(a, b):\n    if a is None:\n        raise ValueError('a')\n    return a + b\n"
-    _write(tmp_path, {"tiny.py": src})
+    two = src + "\n\ndef sub(a, b):\n    total = a - b\n    if total < 0:\n        raise ValueError('negative')\n    return total\n"
+    _write(tmp_path, {"tiny.py": src, "two.py": two})
     sid = kernel.init_session(tmp_path)
     p = kernel.checkout(sid, "tiny", focus=["add"])
-    head, body = p.frame_markdown.split("\n", 1)
-    assert head.startswith("# [stepcheck: tiny | ") and "invariants: " in head
-    assert body == src and p.rendered() == p.frame_markdown
-    assert p.token_count == _tokens.count(p.frame_markdown)
-    assert p.token_count <= _tokens.count(src) + _tokens.count(head) + 1
-    assert p.token_count < kernel.checkout(sid, "tiny").token_count
+    assert p.pragma and p.frame_markdown == src and p.rendered() == src
+    assert p.token_count == _tokens.count(src) < kernel.checkout(sid, "tiny").token_count
+    assert any(i.startswith(("guard:add:", "call:add(")) for i in p.locked_invariants)  # still enforced
+    q = kernel.checkout(sid, "two", focus=["add"])
+    head, rest = q.frame_markdown.split("\n", 1)
+    assert head.startswith("# [stepcheck: two | ") and "invariants: " in head and rest.startswith("```python\n")
+    assert "raise ValueError('a')" in rest and "total = a - b" not in rest  # sliced, not expanded
+    assert "## Locked invariants" in q.rendered() and q.token_count < kernel.checkout(sid, "two").token_count
 
 
 # ------------------------------------------- 3. computed early returns, .get defaults

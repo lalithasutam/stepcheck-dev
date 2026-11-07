@@ -112,7 +112,7 @@ def _stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[s
             if name in new and _stub_kind(body) is None and (kind := _stub_kind(new[name])) is not None]
 
 
-def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool) -> None:
+def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool, nodes=None) -> None:
     """Omission detection: symbol fingerprinting, skeleton-stub body overwrites
     (a def whose real body became `...` / `pass` / docstring-only), and the
     mass-deletion guard.
@@ -120,7 +120,9 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
     Raises kernel.OmissionError. `allow_deletion=True` declares the deletion
     and bypasses both checks (GLOSSARY: Gate B). When several fingerprints are
     missing, the per-symbol one (`@dec on name`) is reported: it says which
-    def or class lost its decorator.
+    def or class lost its decorator. `nodes` (the session's node map) lets a
+    dropped Python def / class that nothing — here or in any dependent — refers
+    to any more pass strict mode as a refactor (`_dead_symbol`).
     """
     from . import OmissionError, _okf
 
@@ -129,6 +131,9 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
 
     staged_symbols = set(staged_info.preserved_symbols)
     dropped = [s for s in node.info.preserved_symbols if s not in staged_symbols]
+    if dropped and str(node.info.path).endswith((".py", ".pyi")):
+        dependents = {nid: n.info.source for nid, n in (nodes or {}).items() if node.info.node_id in n.info.deps}
+        dropped = [s for s in dropped if not _dead_symbol(s, new_source, staged_info, dependents)]
     if dropped:
         named = [s for s in dropped if " on " in s]
         raise OmissionError(
@@ -161,6 +166,29 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
         # Otherwise a concise refactor: every def, class, method and module- or
         # class-level binding survives with its exported signature, no body became
         # a stub (checked above), and Gate C still holds every mined guard clause.
+
+
+def _dead_symbol(sym: str, new_source: str, staged_info, dependents: dict[str, str]) -> bool:
+    """A dropped `def X` / `class X` that nothing refers to any more: the name occurs
+    nowhere in the staged module (as a name, an attribute, a definition or a string
+    such as an `__all__` entry), nowhere in any dependent's source, and the module
+    still exports something. Removing or renaming it is a refactor, not an omission,
+    so strict Gate B lets it through. A decorator fingerprint (`@dec on X`) or an
+    internal call (`call:X`) is never dead this way: those are the silent drops."""
+    kind, _, name = sym.partition(" ")
+    if kind not in ("def", "class") or not name or not staged_info.exports:
+        return False
+    try:
+        tree = ast.parse(new_source)
+    except SyntaxError:
+        return False
+    for n in ast.walk(tree):
+        if ((isinstance(n, ast.Name) and n.id == name) or (isinstance(n, ast.Attribute) and n.attr == name)
+                or (isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name == name)
+                or (isinstance(n, ast.Constant) and n.value == name)):
+            return False
+    mention = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+    return not any(mention.search(src) for src in dependents.values())
 
 
 def _bindings(tree: ast.Module) -> set[str]:
@@ -527,9 +555,94 @@ def _structural_guards(node_id: str, guard_invariants: list[str], staged_source:
     path = (project_paths or {}).get(node_id, f"{node_id}.py")
     present = _okf.present_guards(staged_source, path)
     kind = "guard clause" if _okf.lang_module(path) is None else "leading guard clause"
+    gone = _dead_roots({inv.split(":", 2)[1].split(".")[0] for inv in guard_invariants}, staged_source, path)
     for inv in guard_invariants:
+        if inv not in present and (inv.split(":", 2)[1].split(".")[0] in gone
+                                   or _assert_waived(inv, staged_source, present, path)):
+            continue  # its symbol was removed as dead code (Gate B vetted that), or an assert waiver
         if inv not in present:
             raise LogicalError(
                 f"staged diff violates frame invariant {inv!r} of '{node_id}' "
                 f"(auto-mined {kind} removed or weakened)"
             )
+
+
+def _dead_roots(roots: set[str], staged_source: str, path: str) -> set[str]:
+    """The top-level symbol names among `roots` that the staged Python module neither
+    defines nor mentions (as a name, attribute or string). Such a symbol was removed
+    as dead code — a deletion Gate B has already vetted (`_dead_symbol`) — so its
+    guard clauses cannot be conserved and Gate C does not require them."""
+    from . import _okf
+
+    if _okf.lang_module(path) is not None:
+        return set()
+    try:
+        tree = ast.parse(staged_source)
+    except SyntaxError:
+        return set()
+    live: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            live.add(n.name)
+        elif isinstance(n, ast.Name):
+            live.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            live.add(n.attr)
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            live.add(n.value)
+    return {r for r in roots if r not in live}
+
+
+_FLIP = {ast.Gt: ast.LtE, ast.GtE: ast.Lt, ast.Lt: ast.GtE, ast.LtE: ast.Gt, ast.Eq: ast.NotEq,
+         ast.NotEq: ast.Eq, ast.Is: ast.IsNot, ast.IsNot: ast.Is, ast.In: ast.NotIn, ast.NotIn: ast.In}
+
+
+def _negations(cond: ast.expr) -> list[str]:
+    """Normalized spellings of `not <cond>`: the bare negation, the operand of a
+    `not`, and a single comparison with its operator flipped (`x > 0` -> `x <= 0`)."""
+    out = [ast.unparse(ast.UnaryOp(op=ast.Not(), operand=cond))]
+    if isinstance(cond, ast.UnaryOp) and isinstance(cond.op, ast.Not):
+        out.append(ast.unparse(cond.operand))
+    if isinstance(cond, ast.Compare) and len(cond.ops) == 1 and type(cond.ops[0]) in _FLIP:
+        out.append(ast.unparse(ast.Compare(left=cond.left, ops=[_FLIP[type(cond.ops[0])]()],
+                                           comparators=cond.comparators)))
+    return out
+
+
+def _assert_waived(inv: str, staged_source: str, present: set[str], path: str) -> bool:
+    """A missing Python `assert <cond>` guard that strict mode still accepts: a
+    variable the assertion read no longer exists anywhere in its symbol (removed or
+    renamed in the same refactor, so the assertion could not have survived), or the
+    assertion became an equivalent `if not <cond>: raise …` (a flipped comparison
+    counts). A live assertion deleted outright, or weakened in place, is still a
+    Gate C rejection."""
+    from . import _okf
+
+    if _okf.lang_module(path) is not None:
+        return False
+    try:
+        _kind, sym, clause = inv.split(":", 2)
+    except ValueError:
+        return False
+    clause = re.sub(r" #\d+$", "", clause)
+    if not clause.startswith("assert "):
+        return False
+    try:
+        cond = ast.parse(clause[len("assert "):], mode="eval").body
+        tree = ast.parse(staged_source)
+    except SyntaxError:
+        return False
+    fn = next((f for s, f in _okf._py_symbols(tree.body) if s == sym), None)
+    if fn is None:
+        return False  # the symbol itself is gone: Gate B's call, not a waiver
+    used = {n.id for n in ast.walk(cond) if isinstance(n, ast.Name)} - set(dir(builtins))
+    # "gone" means gone from the whole module: a parameter renamed away, not a
+    # module constant or import the assertion happened to be the only reader of.
+    alive = ({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+             | {a.arg for a in ast.walk(tree) if isinstance(a, ast.arg)}
+             | {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+             | {(a.asname or a.name).split(".")[0] for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
+                for a in n.names})
+    if used and not used <= alive:
+        return True
+    return any(p.startswith(f"guard:{sym}:if {neg} raises ") for neg in _negations(cond) for p in present)

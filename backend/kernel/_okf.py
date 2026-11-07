@@ -262,14 +262,22 @@ def covers_module(source: str, focus: list[str], tree: ast.Module | None) -> boo
     return set(symbol_names(source)) <= {f for f in cone if "." not in f}
 
 
-def pragma_frame(info: ModuleInfo, status: str, locked: bool, invariants: int) -> str:
-    """The zero-inflation frame: one pragma comment line, then the raw source. For a
-    tiny module whose focus covers everything, the OKF frame would cost more than
-    the file; every invariant counted here is still enforced at the gates."""
+def pragma_frame(info: ModuleInfo, status: str, locked: bool, invariants: int, body: str | None = None, *,
+                 callees: list[str] | tuple[str, ...] = (), deps_elided: list[str] | tuple[str, ...] = ()) -> str:
+    """The zero-bloat frame: one pragma comment line — node, state, how many
+    invariants are enforced, the same-file callees expanded with the focus and, when
+    the dependency interfaces did not fit, the deps whose signatures the payload's
+    `dependency_signatures` field carries — then `body` (the focused slice, or the
+    raw source when omitted) in a code fence. What a focused checkout serves when
+    the OKF frame would cost more than the file; everything counted is enforced."""
     lead = "#" if language(info.path) == "python" else "//"
+    fence = _FENCES.get(language(info.path), "python")
     state = f"{status}, locked" if locked else status
-    src = info.source if info.source.endswith("\n") else info.source + "\n"
-    return f"{lead} [stepcheck: {info.node_id} | {state} | invariants: {invariants} enforced]\n{src}"
+    extra = (f" | callees: {', '.join(callees)}" if callees else "") + (
+        f" | deps: {', '.join(deps_elided)} (signatures in dependency_signatures)" if deps_elided else "")
+    src = info.source if body is None else body
+    src = src if src.endswith("\n") else src + "\n"
+    return f"{lead} [stepcheck: {info.node_id} | {state} | invariants: {invariants} enforced{extra}]\n```{fence}\n{src}```\n"
 
 
 def index_markdown(nodes: dict[str, "object"]) -> str:
@@ -878,15 +886,20 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list
       `if <cond> raises <Exc>`   — any `if` whose branch ends in `raise`, at any depth;
       `assert <cond>`            — any assert;
       `if <cond> returns <v>`    — an early return of a constant / None / empty
-                                   container (leading run only when mining);
-      `if <cond> returns early`  — a leading early return of a computed value: the
-                                   condition is held, the expression may be refactored;
+                                   container;
+      `if <cond> returns early`  — an early return of a computed value: the condition
+                                   is held, the expression may be refactored;
+      `else raises <Exc>`        — an if / elif chain whose final `else` raises (one
+                                   clause per chain, so branches may be added);
       `except <T> raises <Exc>`  — a handler that raises (`<re-raise>` for bare raise);
-      `<obj>.get('<key>') has default` — a `.get('<key>', <literal other than None>)`
-                                   lookup, which must not become a bare `<obj>['<key>']`.
-    `mining=False` lists what is present (Gate C's side): every early return also
-    counts as `returns early`, and a `.get` with any default keeps the lookup guarded."""
-    leading_returns_only = mining
+      `<obj>.get(<key>) has default` — a two-argument `.get(key, default)` lookup
+                                   (any key, any default), which must not become a
+                                   bare `<obj>[<key>]` subscript.
+    The `returns` clauses are mined from the `if` statements that are direct branches
+    of the def — not from those inside a loop, `with` or `try`, which are control
+    flow rather than guards. `mining=False` lists what is present (Gate C's side):
+    any if-with-return at any depth counts, also as `returns early`, and a `.get(key)`
+    with or without a default keeps the lookup guarded."""
     out: list[str] = []
     seen: dict[str, int] = {}
 
@@ -899,33 +912,31 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list
     body = fn.body
     if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
         body = body[1:]
-    leading: set[int] = set()
-    for stmt in body:
-        if isinstance(stmt, ast.Assert) or (
-            isinstance(stmt, ast.If) and stmt.body and isinstance(stmt.body[-1], (ast.Raise, ast.Return))
-        ):
-            leading.add(id(stmt))
-            continue
-        break
+    direct = {id(stmt) for stmt in body if isinstance(stmt, ast.If)}
+    elifs = {id(n.orelse[0]) for n in _own_nodes(body)
+             if isinstance(n, ast.If) and len(n.orelse) == 1 and isinstance(n.orelse[0], ast.If)}
     for node in _own_nodes(body):
         if isinstance(node, ast.If) and node.body:
             last = node.body[-1]
             if isinstance(last, ast.Raise):
                 add(f"if {ast.unparse(node.test)} raises {_raised(last)}")
-            elif (isinstance(last, ast.Return) and len(node.body) == 1 and not node.orelse
-                  and (not leading_returns_only or id(node) in leading)):
+            elif isinstance(last, ast.Return) and (not mining or id(node) in direct):
                 cond, value = ast.unparse(node.test), _early_value(last)
                 if value is not None:
                     add(f"if {cond} returns {value}")
                 if value is None or not mining:
                     add(f"if {cond} returns early")
+            if id(node) not in elifs:  # the root of an if / elif chain: does its final else raise?
+                tail = node
+                while len(tail.orelse) == 1 and isinstance(tail.orelse[0], ast.If):
+                    tail = tail.orelse[0]
+                if tail.orelse and isinstance(tail.orelse[-1], ast.Raise):
+                    add(f"else raises {_raised(tail.orelse[-1])}")
         elif isinstance(node, ast.Assert):
             add(f"assert {ast.unparse(node.test)}")
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get"
-              and len(node.args) == 2 and not node.keywords
-              and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
-              and (not mining or (isinstance(node.args[1], ast.Constant) and node.args[1].value is not None))):
-            add(f"{ast.unparse(node.func.value)}.get({node.args[0].value!r}) has default")
+              and not node.keywords and (len(node.args) == 2 or (not mining and len(node.args) == 1))):
+            add(f"{ast.unparse(node.func.value)}.get({ast.unparse(node.args[0])}) has default")
         elif isinstance(node, ast.ExceptHandler):
             caught = ast.unparse(node.type) if node.type is not None else "*"
             for sub in _own_nodes(node.body):

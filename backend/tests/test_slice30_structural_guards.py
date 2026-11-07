@@ -140,7 +140,10 @@ def test_guards_in_nested_scopes_and_repeated_clauses_are_each_held(kernel, tmp_
 
 
 def test_focused_checkout_lists_the_focus_guards_and_counts_the_rest(kernel, tmp_path):
-    _write(tmp_path, {"cookies.py": COOKIES + "\n\ndef pad():\n    return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]\n"})
+    # Data ballast keeps the module larger than its focused frame, so the frame
+    # keeps its frontmatter (a module the frame would outweigh gets a pragma + slice).
+    rows = "".join(f"CONFIG_ROW_{i} = '{'c' * 48}'\n" for i in range(40))
+    _write(tmp_path, {"cookies.py": COOKIES + "\n\n" + rows})
     sid = kernel.init_session(tmp_path)
     p = kernel.checkout(sid, "cookies", focus=["Session.send"])
     guards = [i for i in p.locked_invariants if i.startswith("guard:")]
@@ -229,18 +232,17 @@ def test_concise_refactor_is_not_a_mass_deletion_but_dropped_bindings_still_are(
 
 def test_tiny_module_focus_gets_a_compact_header(kernel, tmp_path):
     # A partial focus on a tiny module: the full header would outweigh the file, so
-    # the frontmatter shrinks while the unfocused symbol stays a skeleton. (A focus
-    # that covers the whole module is the zero-inflation pragma: see slice 31.)
+    # the frame is a one-line pragma over the slice — the unfocused symbol stays a
+    # skeleton, the dependency interfaces and the invariant list still follow.
     src = ("def add(a, b):\n    if a is None:\n        raise ValueError('a')\n    return a + b\n\n\n"
            "def sub(a, b):\n    return a - b\n")
     _write(tmp_path, {"tiny.py": src})
     sid = kernel.init_session(tmp_path)
     p = kernel.checkout(sid, "tiny", focus=["add"])
-    front = yaml.safe_load(p.frame_markdown.split("---\n")[1])
-    assert set(front) <= {"node_id", "path", "status", "locked", "deps", "attestation"}
-    assert "compact header" in p.frame_markdown and "raise ValueError('a')" in p.frame_markdown
-    assert "def sub(a, b):" in p.frame_markdown and "return a - b" not in p.frame_markdown
-    full = kernel.checkout(sid, "tiny")  # the unfocused frame keeps the full header
-    assert p.token_count < full.token_count
+    head, rest = p.frame_markdown.split("\n", 1)
+    assert head.startswith("# [stepcheck: tiny | ACTIVE | invariants: ") and rest.startswith("```python\n")
+    assert "raise ValueError('a')" in rest and "def sub(a, b):" in rest and "return a - b" not in rest
+    full = kernel.checkout(sid, "tiny")  # the full frame keeps its frontmatter and costs more
+    assert full.frame_markdown.startswith("---\n") and p.token_count < full.token_count
     assert "guard:add:if a is None raises ValueError" in p.locked_invariants or any(
         i.startswith("call:add(") for i in p.locked_invariants)

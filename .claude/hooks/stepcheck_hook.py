@@ -13,11 +13,16 @@ itself fails — one line on stderr says so.
 A gate denial on an editing tool prints the structured PreToolUse deny and exits 2:
 Claude Code blocks the call before any byte lands and hands stderr to the agent.
 
-Offline is detected with a short connect probe (STEPCHECK_HOOK_CONNECT_TIMEOUT,
-default 0.25 s). When the gateway URL is local and an install is found, the cold
-call also starts `stepcheck up` detached on that port (at most once a minute;
-pid in $STEPCHECK_HOME/gateway-<port>.json, output in gateway-<port>.log), so
-later calls are answered warm. STEPCHECK_HOOK_AUTOSTART=0 turns that off.
+Offline is detected with a 15 ms connect probe on the loopback socket
+(STEPCHECK_HOOK_CONNECT_TIMEOUT), before anything beyond the standard library is
+imported. A Read — any PreToolUse on a non-editing tool — then exits at once: the
+offline fast path, well under 50 ms of hook time (STEPCHECK_HOOK_TRACE=1 prints
+it on stderr). An editing tool, PostToolUse and Stop still pay for the in-process
+gates: that is the safety property, not a cost to shave. When the gateway URL is
+local and an install is found, the cold call also starts `stepcheck up` detached
+on that port (at most once a minute; pid in $STEPCHECK_HOME/gateway-<port>.json,
+output in gateway-<port>.log), so later calls are answered warm.
+STEPCHECK_HOOK_AUTOSTART=0 turns that off.
 
 The relay imports only the standard library and is installed as `python -S` (no
 site / .pth scan at start-up); the offline fallback runs site.main() itself
@@ -37,6 +42,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
+_T0 = time.perf_counter()
 URL = os.environ.get("STEPCHECK_HOOK_URL", "http://127.0.0.1:8420/v1/step/hook")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _DAEMON = ("import json, os, sys; backend, port, state = sys.argv[1:4]; sys.path.insert(0, backend); "
@@ -62,7 +68,7 @@ def _post(payload: bytes) -> bytes:
             return r.read()
     host, port = _endpoint()
     path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
-    with socket.create_connection((host, port), timeout=float(os.environ.get("STEPCHECK_HOOK_CONNECT_TIMEOUT", "0.25"))) as s:
+    with socket.create_connection((host, port), timeout=float(os.environ.get("STEPCHECK_HOOK_CONNECT_TIMEOUT", "0.015"))) as s:
         s.settimeout(float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2")))
         s.sendall((f"POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n"
                    f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n").encode("ascii") + payload)
@@ -118,27 +124,49 @@ def _warm_gateway(backend, force=False) -> bool:
         return False
 
 
+def _is_backend(c) -> bool:
+    return bool(c) and os.path.isfile(os.path.join(c, "hooks.py")) and os.path.isfile(os.path.join(c, "kernel", "_gates.py"))
+
+
+def _load_site() -> None:
+    """Installed as `python -S`: load site-packages now (the kernel needs them)."""
+    if sys.flags.no_site:
+        import site
+
+        site.main()
+
+
 def _backend_dir():
-    candidates = [os.environ.get("STEPCHECK_BACKEND")]
+    """The StepCheck backend: $STEPCHECK_BACKEND or $CLAUDE_PROJECT_DIR/backend first
+    (no site scan), then the installed `backend` package."""
+    for c in (os.environ.get("STEPCHECK_BACKEND"),
+              os.path.join(os.environ["CLAUDE_PROJECT_DIR"], "backend") if os.environ.get("CLAUDE_PROJECT_DIR") else None):
+        if _is_backend(c):
+            return c
     try:
+        _load_site()
         import importlib.util
 
         spec = importlib.util.find_spec("backend")
-        candidates += list(spec.submodule_search_locations or []) if spec else []
+        for c in list(spec.submodule_search_locations or []) if spec else []:
+            if _is_backend(c):
+                return c
     except (ImportError, ValueError):
         pass
-    if os.environ.get("CLAUDE_PROJECT_DIR"):
-        candidates.append(os.path.join(os.environ["CLAUDE_PROJECT_DIR"], "backend"))
-    for c in candidates:
-        if c and os.path.isfile(os.path.join(c, "hooks.py")) and os.path.isfile(os.path.join(c, "kernel", "_gates.py")):
-            return c
     return None
+
+
+def _trace(rc: int) -> int:
+    if os.environ.get("STEPCHECK_HOOK_TRACE"):
+        sys.stderr.write(f"stepcheck hook: {(time.perf_counter() - _T0) * 1000:.1f} ms in hook\n")
+    return rc
 
 
 def _in_process(event, backend):
     """The gateway's answer computed here, or None when it cannot be."""
     if backend is None:
         return None
+    _load_site()
     sys.path.insert(0, backend)
     import hooks
     from kernel import StateKernel
@@ -188,10 +216,6 @@ def _session_start(event) -> int:
         ident, online = out.get("stepcheck_gateway"), True
     except Exception:  # noqa: BLE001 — offline, or not a StepCheck gateway
         ident, online = None, False
-    if sys.flags.no_site:  # `python -S`: an installed backend is found through site-packages
-        import site
-
-        site.main()
     backend = _backend_dir()
     force, note = False, None
     if online and backend is not None:
@@ -240,24 +264,26 @@ def main() -> int:
         out = json.loads(_post(json.dumps(event).encode("utf-8")) or b"{}")
     except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout
         offline = f"gateway offline ({exc.__class__.__name__})"
-        if sys.flags.no_site:  # installed as `python -S`: load site-packages only now, for the kernel
-            import site
-
-            site.main()
+        if event.get("hook_event_name", "PreToolUse") == "PreToolUse" and event.get("tool_name") not in EDIT_TOOLS:
+            # Read: nothing to gate, so leave before importing anything heavier — the
+            # offline fast path. Autostart, when on, still kicks the daemon so the
+            # next call is answered warm.
+            hint = "Run `stepcheck up`."
+            if os.environ.get("STEPCHECK_HOOK_AUTOSTART", "1") != "0" and _warm_gateway(_backend_dir()):
+                hint = "warming it in the background"
+            sys.stderr.write(f"stepcheck hook: {offline}; allowing the {event.get('tool_name')}; {hint}\n")
+            return _trace(0)
         backend = _backend_dir()
         hint = "warming it in the background" if _warm_gateway(backend) else "Run `stepcheck up`."
-        if event.get("tool_name") == "Read":
-            sys.stderr.write(f"stepcheck hook: {offline}; allowing the Read; {hint}\n")
-            return 0
         try:
             out = _in_process(event, backend)
         except Exception as inner:  # noqa: BLE001 — a kernel failure must not brick the agent
             sys.stderr.write(f"stepcheck hook: {offline}, in-process check failed ({inner!r}); allowing.\n")
-            return 0
+            return _trace(0)
         if out is None:
-            sys.stderr.write(f"stepcheck hook: {offline}, no StepCheck install found; allowing. Run `stepcheck up`.\n")
-            return 0
-    return _emit(event, out)
+            sys.stderr.write(f"stepcheck hook: {offline}, no StepCheck install found; allowing. {hint}\n")
+            return _trace(0)
+    return _trace(_emit(event, out))
 
 
 if __name__ == '__main__':

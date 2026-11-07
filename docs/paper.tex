@@ -6,7 +6,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-Long agent sessions degrade in two coupled ways: the context re-read every turn grows until attention over it decays, and silent omissions pass the tests the agent still runs. StepCheck interposes a deterministic kernel between agent and model: modules are compiled into OKF frames, checked out as AST skeletons with a chosen focus, and modified only through patches that must pass three gates before a DSSE attestation lands. We evaluate on 9 installed packages (387 files, 152,176 LOC) and on the kernel's own repository; the 50-turn benchmark sends 15,039 tokens where a raw agent sends 120,815 (87.6\% saved).
+Long agent sessions degrade in two coupled ways: the context re-read every turn grows until attention over it decays, and silent omissions pass the tests the agent still runs. StepCheck interposes a deterministic kernel between agent and model: modules are compiled into OKF frames, checked out as AST skeletons with a chosen focus, and modified only through patches that must pass three gates before a DSSE attestation lands. We evaluate on 9 installed packages (387 files, 152,176 LOC) and on the kernel's own repository; the 50-turn benchmark sends 14,048 tokens where a raw agent sends 120,815 (88.4\% saved).
 \end{abstract}
 \section{Evaluation}
 \begin{table}[h]
@@ -599,5 +599,5 @@ v031\_tests\_slice21 & 1 & 0 & 0 & yes & 0 \\
 \label{tab:dogfoodv031}
 \end{table}
 \section{Reproducibility}
-python -m pytest -q (272 passed); stepcheck ci . (73 modules verified); the discovery scripts under .stepcheck/discovery/.
+python -m pytest -q (279 passed); stepcheck ci . (74 modules verified); the discovery scripts under .stepcheck/discovery/.
 \end{document}

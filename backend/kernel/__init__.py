@@ -103,13 +103,14 @@ class CheckoutPayload:
     focus: list[str] | None = None
     auto_skeletonized: bool = False
     elided: list[str] = field(default_factory=list)  # budget backstop: what the payload dropped
-    # Zero-inflation bypass: the frame is a one-line pragma + the raw source, and
-    # it is the whole rendered payload (see StateKernel._assemble).
+    # Zero-bloat floor: the frame is a one-line pragma over the slice (or the bare
+    # source), the rendered payload is that plus the dependency interfaces that fit,
+    # and the invariant list is the `locked_invariants` field (StateKernel._assemble).
     pragma: bool = False
 
     def rendered(self) -> str:
         if self.pragma:
-            return self.frame_markdown
+            return _render_payload(self.frame_markdown, self.dependency_skeletons, [])
         return _render_payload(
             self.frame_markdown, self.dependency_skeletons, self.locked_invariants
         )
@@ -340,12 +341,11 @@ class StateKernel:
 
         staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s))
         try:
-            _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion)
+            _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion, nodes=s.nodes)
         except OmissionError as exc:
             return self._reject(s, node, "B", exc, dry_run=dry_run)
 
-        # Hand-written invariants always apply; auto-mined guards are waived by a
-        # declared deletion (the agent said it meant to remove behaviour).
+        # A declared deletion waives the mined guards; hand-written invariants always apply.
         live_invariants = (
             [inv for inv in node.info.invariants if inv not in node.info.mined_invariants]
             if allow_deletion
@@ -520,16 +520,27 @@ class StateKernel:
         listed = invariants
         rendered = _render_payload(frame, dep_skeletons, listed)
         tokens = _tokens.count(rendered)
-        if (focus and tokens > _tokens.count(node.info.source)
-                and _okf.covers_module(node.info.source, list(focus), compactor.tree)):
-            # Zero-inflation bypass: the focus covers the whole module and the OKF
-            # payload would still cost more than the raw file. Serve a one-line
-            # pragma + the source instead, when that is smaller; dependency interfaces
-            # and the invariant list are left out of the text (all still enforced; the
-            # invariants stay in `locked_invariants`).
-            pragma = _okf.pragma_frame(node.info, node.status, node.locked, len(node.info.invariants))
-            if _tokens.count(pragma) < tokens:
-                return pragma, dep_sigs, invariants, dep_skeletons, _tokens.count(pragma), False, [], True
+        # The floor yields to the budget: a frame at or over CHECKOUT_TOKEN_BUDGET takes
+        # the ladder below instead (it is far under raw once fitted).
+        raw = _tokens.count(node.info.source) if tokens < CHECKOUT_TOKEN_BUDGET else tokens
+        if focus is not None and tokens > raw:  # a focused or skeleton view, never the full frame
+            # Zero-bloat floor. The OKF frame would cost more than the file it slices,
+            # so the frontmatter and prose go: a one-line pragma over the same sliced
+            # body, still followed by the dependency interfaces and the invariant list
+            # (the only way a Door 1 or hook reader sees them). When the focus and its
+            # cone cover the whole module there is nothing left to hide, and the bare
+            # source — exactly `raw` tokens — is the floor (the deps keep their
+            # signatures in `dependency_signatures`). A partial focus is never expanded
+            # to the whole file: it stays sliced even when its stubs, cone and
+            # interfaces outweigh the few lines they hide.
+            body = _okf.skeleton(node.info.source, list(focus), tree=compactor.tree)
+            callees = (_okf.callee_closure(compactor.tree, list(focus), node.info.source)[0]
+                       if compactor.tree is not None else [])
+            frame = _okf.pragma_frame(node.info, node.status, node.locked, len(node.info.invariants), body, callees=callees)
+            tokens = _tokens.count(_render_payload(frame, dep_skeletons, listed))
+            if tokens > raw and _okf.covers_module(node.info.source, list(focus), compactor.tree):
+                return node.info.source, dep_sigs, invariants, {}, raw, False, [], True
+            return frame, dep_sigs, invariants, dep_skeletons, tokens, False, [], False
         auto = False
         if focus is None and tokens >= CHECKOUT_TOKEN_BUDGET:
             # Unfocused frame would blow the budget: fall back to a pure AST

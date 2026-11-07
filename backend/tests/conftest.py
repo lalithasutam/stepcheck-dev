@@ -3,6 +3,7 @@
 No mocks anywhere: tests drive the real StateKernel against a real on-disk
 multi-file Python project (GLOSSARY.md, "Testing rules").
 """
+import gc
 import sys
 import textwrap
 from pathlib import Path
@@ -100,6 +101,18 @@ def kernel():
     from kernel import StateKernel
 
     return StateKernel()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _release_module_memory():
+    """Free the kernels, corpus trees and payloads one test module built before the next starts.
+
+    Cycles between StateKernel sessions, their compactor ASTs and the gate caches otherwise
+    stay alive until the interpreter exits; across 32 files that peaks high enough to get the
+    suite killed on a low-memory machine.
+    """
+    yield
+    gc.collect()
 
 
 @pytest.fixture(autouse=True)

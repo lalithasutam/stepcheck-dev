@@ -81,7 +81,7 @@ def test_payloads_are_memoized_per_focus_until_the_session_mutates(kernel, proje
     assert v.accepted
     after = kernel.checkout(sid, "billing", focus=[])
     assert "def _h(" in after.frame_markdown  # the memo did not outlive the commit
-    assert _meta(after)["status"] == "VERIFIED"
+    assert "| VERIFIED |" in after.frame_markdown  # a skeleton the module outweighs: status rides in the pragma line
 
 
 def test_locate_node_source_and_omission_report_are_cheap_public_queries(kernel, project):
@@ -320,7 +320,10 @@ def test_a_run_of_unreferenced_siblings_folds_into_one_line_naming_them(kernel, 
 
 
 def test_focused_frontmatter_is_scoped_to_the_focus(kernel, tmp_path):
-    (tmp_path / "store.py").write_text(MODULE, encoding="utf-8", newline="\n")
+    # Data ballast keeps the module larger than its focused frame: a module the
+    # frame would outweigh is served as a pragma + slice (no frontmatter at all).
+    rows = "".join(f"CONFIG_ROW_{i} = '{'c' * 48}'\n" for i in range(40))
+    (tmp_path / "store.py").write_text(MODULE + "\n\n" + rows, encoding="utf-8", newline="\n")
     sid = kernel.init_session(tmp_path)
     full = _meta(kernel.checkout(sid, "store", focus=[]))
     scoped = _meta(kernel.checkout(sid, "store", focus=["Repo.add"]))
