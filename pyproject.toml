@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stepcheck-dev"
-version = "0.3.2"
+version = "0.3.3"
 description = "Deterministic anti-context-rot state engine, BYOK token-firewall proxy, Streamable HTTP MCP server and Studio UI for coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
