@@ -58,7 +58,10 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     Decorators are fingerprinted twice: once per module (`@name`) and once per
     symbol (`@name on symbol`), so dropping `@fixture` from one function is an
     omission even while a sibling still carries it. Method decorators are
-    fingerprinted per dotted symbol (`@width.setter on Box.width`)."""
+    fingerprinted per dotted symbol (`@width.setter on Box.width`). A decorator a
+    symbol carries more than once — `@overload` on each signature of an overload
+    set — is counted (`@overload on f x2`, `x3`, …), so losing one of the blocks
+    is an omission too."""
     _mod = lang_module(path)
     if _mod is not None:
         return _mod.analyze(node_id, path, source, project_modules)
@@ -66,14 +69,19 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     exports: list[str] = []
     preserved: list[str] = []
+    dec_counts: dict[str, int] = {}
 
     def keep_decorators(stmt: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef, owner: str = "") -> None:
         for dec in stmt.decorator_list:
             name = ast.unparse(dec).split("(")[0]
-            symbols = (f"@{name} on {owner}.{stmt.name}",) if owner else (f"@{name}", f"@{name} on {stmt.name}")
+            per_symbol = f"@{name} on {owner}.{stmt.name}" if owner else f"@{name} on {stmt.name}"
+            symbols = (per_symbol,) if owner else (f"@{name}", per_symbol)
             for sym in symbols:
                 if sym not in preserved:
                     preserved.append(sym)
+            dec_counts[per_symbol] = dec_counts.get(per_symbol, 0) + 1
+            if dec_counts[per_symbol] > 1:
+                preserved.append(f"{per_symbol} x{dec_counts[per_symbol]}")
 
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -221,6 +229,11 @@ def frame_markdown(
             if consts_over:
                 note += (f" Constants folded (over the {CONST_TOKEN_BUDGET:,}-token constant budget):"
                          f" {', '.join(consts_over)}.")
+            if over_budget:  # what the folded callees read is part of the cone too: named, not shown
+                behind_kept, behind_over = cone_constants(tree, list(focus) + callees + over_budget, info.source)
+                behind = sorted((set(behind_kept) | set(behind_over)) - set(consts) - set(consts_over))
+                if behind:
+                    note += f" Constants behind that budget: {', '.join(behind)}."
         if over_budget:
             note += (f" Callees kept as signatures (over the {CALLEE_TOKEN_BUDGET:,}-token callee budget;"
                      f" add them to focus to see them): {', '.join(over_budget)}.")
@@ -304,14 +317,39 @@ def index_markdown(nodes: dict[str, "object"]) -> str:
     )
 
 
+def _frame_describes_disk(okf_dir: Path, nid: str, node, root: Path) -> bool:
+    """True when the frame already on disk is VERIFIED with an attestation that
+    hashes to the tracked file's current bytes while this session's own view of
+    the node does not — a stale session must not overwrite the truth about the
+    tree with its rejection or its older attestation."""
+    import hashlib
+
+    try:
+        disk = hashlib.sha256((root / node.info.path).read_bytes()).hexdigest()
+        mine = node.verified[-1]["payload"]["sha256"] if node.verified else None
+        if mine == disk:
+            return False
+        text = (okf_dir / f"{nid}.md").read_text(encoding="utf-8")
+    except (OSError, KeyError, TypeError):
+        return False
+    front = text.split("---\n")[1] if text.startswith("---\n") else ""
+    status = re.search(r"^status: (\S+)$", front, re.M)
+    shas = re.findall(r"^\s+sha256: ([0-9a-f]{64})$", front, re.M)
+    return bool(status and status.group(1) == "VERIFIED" and shas and shas[-1] == disk)
+
+
 def write_frames(
-    okf_dir: Path, nodes: dict[str, "object"], written: dict[str, str] | None = None
+    okf_dir: Path, nodes: dict[str, "object"], written: dict[str, str] | None = None, *,
+    root: Path | None = None,
 ) -> dict[str, str]:
     """Write one frame per node plus index.md. Returns {node_id | '__index__':
     sha256 of the frame text}; pass that back as `written` on the next call and
     frames whose text did not change are left alone (no disk write). Frames of
     nodes this session does not track (left by an older session that named them
-    differently) are removed: the directory mirrors exactly one node set."""
+    differently) are removed: the directory mirrors exactly one node set. With
+    `root`, a frame that is VERIFIED on disk and attests the file's current bytes
+    is left alone by a session whose view of that node is behind (its rejected
+    sync, its older attestation): the shared frame keeps describing the tree."""
     import hashlib
 
     okf_dir.mkdir(parents=True, exist_ok=True)
@@ -324,10 +362,12 @@ def write_frames(
     shas: dict[str, str] = {}
     for key, text in pages.items():
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        shas[key] = digest
         if previous.get(key) != digest:
+            if key != "__index__" and root is not None and _frame_describes_disk(okf_dir, key, nodes[key], root):
+                continue  # not ours to rewrite; re-evaluated on the next flush
             name = "index.md" if key == "__index__" else f"{key}.md"
             (okf_dir / name).write_text(text, encoding="utf-8")
+        shas[key] = digest
     for stale in okf_dir.glob("*.md"):
         if stale.name != "index.md" and stale.stem not in nodes:
             stale.unlink()
@@ -1427,8 +1467,10 @@ def callee_closure(tree: ast.Module, focus: list[str], source: str | None = None
     and within one call depth the smallest first (small helpers are where
     business rules hide; the budget buys the most of them); a visited set
     makes recursion and call cycles terminate. With `source`, callees whose
-    bodies would push the total past `budget` tokens are left out (and not
-    followed) — returned second so the frame can name them.
+    bodies would push the total past `budget` tokens are left out — returned
+    second so the frame can name them — but still followed: what they call is
+    part of the cone too, expanded when it fits and named when it does not, so
+    a helper behind the budget wall never hides the rest of the chain.
     Returns (expanded, over_budget), both sorted."""
     import heapq
 
@@ -1462,10 +1504,10 @@ def callee_closure(tree: ast.Module, focus: list[str], source: str | None = None
             continue
         if sym not in focus_set:
             if lines is not None and spent + cost > budget:
-                skipped.append(sym)
-                continue
-            spent += cost
-            expanded.append(sym)
+                skipped.append(sym)  # named, not expanded — and still walked below
+            else:
+                spent += cost
+                expanded.append(sym)
         owner_default = sym.split(".")[0] if "." in sym else None
         targets: list[str] = []
         if owner_default is not None and owner_default not in covered:

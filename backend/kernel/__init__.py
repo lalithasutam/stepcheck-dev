@@ -431,6 +431,13 @@ class StateKernel:
                 f"and must be checked out and re-verified",
                 subtype="INTER_NODE_DIRTY",
             )
+        rejected = self._refused(s)
+        if rejected:
+            raise OmissionError(
+                f"session cannot finalize: nodes {rejected} are REJECTED — the bytes on disk "
+                f"failed a gate; restore the file or re-commit it through the gates",
+                subtype="INTER_NODE_REJECTED",
+            )
         return True
 
     def lock_node(self, session_id: str, node_id: str) -> None:
@@ -615,7 +622,13 @@ class StateKernel:
             except (OSError, UnicodeError):
                 continue
             digest = _sha256(raw)
-            if digest == node.disk_sha256 or s.sync_refused.get(nid) == digest:
+            if digest == node.disk_sha256:
+                if node.status == REJECTED:  # the refused bytes are gone: the file is what the session holds
+                    node.status = VERIFIED if node.verified else ACTIVE
+                    s.sync_refused.pop(nid, None)
+                    self._flush(s)
+                continue
+            if s.sync_refused.get(nid) == digest:
                 continue
             if text == node.info.source:  # line endings / encoding only
                 node.disk_sha256 = digest
@@ -630,11 +643,31 @@ class StateKernel:
         return {"synced": synced, "rejected": rejected}
 
     def omission_report(self, session_id: str) -> dict:
-        """`{"dirty": [node ids in DIRTY_OMISSION_RISK], "can_finalize": bool}` —
-        what `check_omission_risks` and the Stop hook ask, without the graph."""
+        """`{"dirty": [node ids in DIRTY_OMISSION_RISK], "rejected": [node ids left
+        REJECTED — bytes a sync or commit refused], "can_finalize": bool}` — what
+        `check_omission_risks` and the Stop hook ask, without the graph. Either
+        list blocks finalization: a dependent still to re-verify, or a file on
+        disk that failed a gate."""
         s = self._session(session_id)
         dirty = sorted(nid for nid, n in s.nodes.items() if n.status == DIRTY)
-        return {"dirty": dirty, "can_finalize": not dirty}
+        rejected = self._refused(s)
+        return {"dirty": dirty, "rejected": rejected, "can_finalize": not dirty and not rejected}
+
+    def _refused(self, s: _Session) -> list[str]:
+        """REJECTED nodes whose file on disk is not what the session holds — bytes a
+        sync refused (or that were never judged). A rejected *attempt* that left the
+        file alone is not one: the tree is still the attested one."""
+        out = []
+        for nid, n in sorted(s.nodes.items()):
+            if n.status != REJECTED:
+                continue
+            try:
+                if _sha256((s.root / n.info.path).read_bytes()) == n.disk_sha256:
+                    continue
+            except OSError:
+                pass
+            out.append(nid)
+        return out
 
     def _reject(self, s: _Session, node: _Node, gate: str, exc: GateError, *, dry_run: bool = False) -> CommitVerdict:
         if not node.locked and not dry_run:
@@ -707,6 +740,7 @@ class StateKernel:
 
         dirtied: list[str] = []
         reverified: list[str] = []
+        facades: list[tuple[str, set[str]]] = []  # (dirtied importer, the broken names it binds)
         for dep_id, dep in sorted(s.nodes.items()):
             if dep_id == node.info.node_id or node.info.node_id not in dep.info.deps:
                 continue
@@ -730,6 +764,26 @@ class StateKernel:
                     continue
             dep.status = DIRTY
             dirtied.append(dep_id)
+            if imported:
+                facades.append((dep_id, {n for n in imported if n} & changed))
+        # A dependent that binds a broken name at module level re-exports it — a
+        # package `__init__` doing `from .app import foo`, a TS barrel's
+        # `export { foo } from './sub'`, Rust's `pub use` — so the break reaches
+        # whoever imports that name from the facade, however many hops away.
+        while facades:
+            via_id, names = facades.pop()
+            if not names:
+                continue
+            for far_id, far in sorted(s.nodes.items()):
+                if far_id in dirtied or far_id == node.info.node_id or via_id not in far.info.deps:
+                    continue
+                via = s.nodes[via_id]
+                hit = {n for n in _okf.resolve_imports(far_id, far.info.path, far.info.source, modules)
+                       .get(via_id, set()) if n} & names
+                if hit and via is not None:
+                    far.status = DIRTY
+                    dirtied.append(far_id)
+                    facades.append((far_id, hit))
 
         envelope = _dsse_envelope(
             node.info.node_id,
@@ -884,7 +938,7 @@ class StateKernel:
         s.payload_cache.clear()  # the canonical state is about to change
         if self._ephemeral:
             return
-        s.frame_shas = _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes, s.frame_shas)
+        s.frame_shas = _okf.write_frames(s.root / ".stepcheck" / "okf", s.nodes, s.frame_shas, root=s.root)
         self._persist(s)
 
 

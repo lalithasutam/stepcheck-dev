@@ -92,7 +92,7 @@ def test_locate_node_source_and_omission_report_are_cheap_public_queries(kernel,
     assert kernel.locate(sid, project / "README.md") is None
     assert kernel.locate(sid, project.parent / "elsewhere.py") is None
     assert kernel.node_source(sid, "billing") == BILLING_SRC
-    assert kernel.omission_report(sid) == {"dirty": [], "can_finalize": True}
+    assert kernel.omission_report(sid) == {"dirty": [], "rejected": [], "can_finalize": True}
 
     kernel.lock_node(sid, "auth")
     assert kernel.locate(sid, project / "auth.py")["status"] == "LOCKED"
@@ -101,7 +101,7 @@ def test_locate_node_source_and_omission_report_are_cheap_public_queries(kernel,
         'def charge(user: str, amount_cents: int, currency: str = "usd") -> dict:',
     )
     assert kernel.commit(sid, "billing", source=changed).dirtied == ["reports"]
-    assert kernel.omission_report(sid) == {"dirty": ["reports"], "can_finalize": False}
+    assert kernel.omission_report(sid) == {"dirty": ["reports"], "rejected": [], "can_finalize": False}
     with pytest.raises(KeyError):
         kernel.omission_report("sk-000000000000")
 
@@ -402,7 +402,10 @@ def test_statekernel_method_focus_is_half_the_class_focus_on_the_real_kernel(ker
     # 1,000-token callee budget (`_okf.CALLEE_TOKEN_BUDGET`): 3,063 against
     # 8,275 (37.0%) on 2026-11-05. v0.3.2 adds the class state (`__init__`)
     # to that cone, inside the same budget: 3,180 against 8,365 (38.0%) on
-    # 2026-11-07. The floor is the old one plus that budget:
-    assert method.token_count < 2300 + 1000, (method.token_count, whole.token_count)
+    # 2026-11-07. Slice 33 names the whole transitive cone behind the callee
+    # budget (the helpers and constants the folded callees reach — about 100
+    # tokens of names on this module): 3,35x against 11,771 (28.5%) on
+    # 2026-11-08. The floor is the old one plus that budget plus the named cone:
+    assert method.token_count < 2300 + 1000 + 150, (method.token_count, whole.token_count)
     assert "of the focus, expanded verbatim: StateKernel.__init__, StateKernel._flush, StateKernel._get" in method.frame_markdown
     assert method.token_count <= 0.4 * whole.token_count, (method.token_count, whole.token_count)

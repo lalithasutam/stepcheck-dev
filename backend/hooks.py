@@ -222,31 +222,64 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
     explicit = event.get("stepcheck_session_id")
     candidates = [(explicit, None)] if explicit else sessions_for(Path(event.get("cwd") or os.getcwd()))
     dirty: dict[str, list[str]] = {}
+    rejected: dict[str, list[str]] = {}
     for sid, _root in candidates:
         try:
-            kernel.sync(sid)  # adopt the turn's last writes before judging it
-            nodes = kernel.omission_report(sid)["dirty"]
+            refused = kernel.sync(sid)["rejected"]  # adopt the turn's last writes before judging it
+            report = kernel.omission_report(sid)
         except KeyError:
             continue
-        if nodes:
-            dirty[sid] = nodes
-    if not dirty:
+        if report["dirty"]:
+            dirty[sid] = report["dirty"]
+        if report["rejected"]:
+            rejected[sid] = [f"{nid} (Gate {refused[nid]})" if nid in refused else nid for nid in report["rejected"]]
+    if not dirty and not rejected:
         return {}
-    detail = "; ".join(f"session {sid}: {', '.join(nodes)}" for sid, nodes in dirty.items())
-    return {
-        "decision": "block",
-        "reason": (
-            "StepCheck omission guard: these modules hold DIRTY_OMISSION_RISK because an exported "
-            "signature they depend on changed. Check each out (checkout_context_frame, focus=[]) and "
-            "re-commit it (commit_verified_step) until check_omission_risks reports can_finalize: true. "
-            + detail
-        ),
-    }
+    parts = []
+    if dirty:
+        parts.append(
+            "these modules hold DIRTY_OMISSION_RISK because an exported signature they depend on changed. "
+            "Check each out (checkout_context_frame, focus=[]) and re-commit it (commit_verified_step) until "
+            "check_omission_risks reports can_finalize: true. "
+            + "; ".join(f"session {sid}: {', '.join(nodes)}" for sid, nodes in dirty.items())
+        )
+    if rejected:
+        parts.append(
+            "these modules are REJECTED: the bytes on disk (a shell command, a script, an editor) failed a gate "
+            "and were not adopted. Restore the file or re-commit it through the gates (declare an intended "
+            "deletion with allow_deletion). "
+            + "; ".join(f"session {sid}: {', '.join(nodes)}" for sid, nodes in rejected.items())
+        )
+    return {"decision": "block", "reason": "StepCheck omission guard: " + " ".join(parts)}
 
 
 def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
     """Adopt the bytes an Edit / Write just wrote, through the gates, so the session
-    (and `stepcheck ci`) is current the moment the tool returns."""
+    (and `stepcheck ci`) is current the moment the tool returns. A Bash command may
+    have written anything: every registered session for the cwd is synced whole,
+    and a file the gates refuse is reported (the Stop hook then blocks on it)."""
+    if event.get("tool_name") == "Bash":
+        explicit = event.get("stepcheck_session_id")
+        candidates = [(explicit, None)] if explicit else sessions_for(Path(event.get("cwd") or os.getcwd()))
+        refused: list[str] = []
+        for sid, _root in candidates:
+            try:
+                rejected = kernel.sync(sid)["rejected"]
+            except KeyError:
+                continue
+            if rejected:
+                paths = {n["node_id"]: n["path"] for n in kernel.graph(sid)["nodes"]}
+                refused += [f"{paths.get(nid, nid)} (session {sid}, Gate {why})" for nid, why in rejected.items()]
+        if not refused:
+            return {}
+        return {"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": (
+                "StepCheck: the shell command changed tracked modules that the gates refused to adopt — "
+                + "; ".join(refused) + ". Restore each file or re-commit it through the gates; the Stop hook "
+                "blocks while a module stays REJECTED."
+            ),
+        }}
     if event.get("tool_name") not in EDIT_TOOLS:
         return {}
     tool_input = event.get("tool_input") or {}

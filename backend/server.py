@@ -179,12 +179,9 @@ def _build_mcp() -> FastMCP:
 
     @m.tool()
     async def check_omission_risks(session_id: str) -> dict[str, Any]:
-        """Nodes holding DIRTY_OMISSION_RISK and whether the session can finalize."""
-        graph = KERNEL.graph(session_id)
-        dirty = [
-            n["node_id"] for n in graph["nodes"] if n["status"] == "DIRTY_OMISSION_RISK"
-        ]
-        return {"dirty": dirty, "can_finalize": not dirty}
+        """Nodes holding DIRTY_OMISSION_RISK, nodes left REJECTED (bytes a sync or
+        commit refused), and whether the session can finalize."""
+        return KERNEL.omission_report(session_id)
 
     @m.tool()
     async def get_token_savings(session_id: str) -> dict[str, Any]:

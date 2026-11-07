@@ -49,6 +49,22 @@ gateway with a 15 ms loopback connect probe before importing anything beyond the
 A PreToolUse on a non-editing tool (Read) then exits at once — tens of milliseconds of hook time,
 `STEPCHECK_HOOK_TRACE=1` prints it — while an editing tool, PostToolUse and Stop still run the
 in-process gates: a dead socket never lets a broken write through.
+**Shell writes:** a `Bash` command is not gated before it runs (nothing is staged to judge), so its
+PostToolUse syncs every registered session for the cwd; a tracked file the gates refuse stays
+REJECTED and is reported as additionalContext, and the Stop hook blocks on it (`omission_report`
+lists `rejected` next to `dirty`; `can_finalize` needs both empty, `finalize_session` raises
+`INTER_NODE_REJECTED`). **Frame protection:** a session whose view of a node is behind the tree
+(its sync was rejected, or its last attestation is older than the file) never overwrites that
+node's on-disk OKF frame while the frame is VERIFIED and attests the file's current bytes — a
+stale session cannot make `stepcheck ci` fail on a correct tree.
+
+**Causal cone** — What a focused checkout carries besides the focus: same-file callees
+(`name(...)`, `self.m(...)`, `Class.m(...)`) followed transitively, bare decorators, a method's
+`__init__` / `__post_init__` and class attributes, and the module constants the cone reads.
+Callees are expanded verbatim breadth-first, smallest first, up to the 1,000-token callee budget;
+a callee over the budget is kept as a signature and named in the frame note — and still walked,
+so the helpers it calls are expanded when they fit and named when they do not, and the constants
+read only behind that wall are named too. Nothing in the cone is silently absent.
 
 **StateKernel** — The single deep module behind Seam 1. Owns OKF compilation, sessions,
 checkout/commit, the three gates, locking, attestation, and telemetry. Everything else in
@@ -140,8 +156,16 @@ by a dependency change returns to clean). Failure: `MechanicalError`. `verified[
 (`INTRA_NODE_MASS_DELETION`) — for Python only when the shrink also loses a **binding** (a def,
 class, method, or module- / class-level assigned name) or changes an exported signature: a
 **concise refactor** that keeps every binding, stubs no body and keeps every Gate C guard passes.
+A **skeleton-stub body** (`INTRA_NODE_BODY_STUBBED`) is a def whose real body became `...` / `pass`
+/ docstring-only — and, for TS/JS, Go, Rust and Java, a brace body of two or more statements that
+became empty, comment-only, a placeholder macro (`todo!()`, `unimplemented!()`) or a lone trivial
+`return` (`return nil / null / 0 / "" / false`). A decorator a symbol carries more than once is
+counted (`@overload on f x2`), so dropping one block of an overload set is a dropped fingerprint.
 On an *accepted* export-signature change, downstream dependents
-transition to `DIRTY_OMISSION_RISK` (`INTER_NODE_DIRTY` propagation). Failure: `OmissionError`.
+transition to `DIRTY_OMISSION_RISK` (`INTER_NODE_DIRTY` propagation), and the break follows
+**re-export facades**: a dependent that binds a broken name at module level (`from .app import foo`
+in a package `__init__`, a TS barrel's `export { foo } from './sub'`, Rust `pub use`) forwards it
+to whoever imports that name from the facade, however many hops away. Failure: `OmissionError`.
 **Dead-symbol rule (strict mode):** a dropped Python `def X` / `class X` passes without
 `allow_deletion` when the name occurs nowhere in the staged module (name, attribute, definition or
 string), nowhere in any dependent's source, and the module still exports something — removing or

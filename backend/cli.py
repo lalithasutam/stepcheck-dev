@@ -896,9 +896,13 @@ def cmd_hooks(args: argparse.Namespace) -> int:
     # takes longer than a per-tool decision, hence its larger timeout.
     for event, matcher, timeout in (("SessionStart", None, 30),
                                     ("PreToolUse", "Read|Edit|Write|MultiEdit|NotebookEdit", 10),
-                                    ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", 10), ("Stop", None, 10)):
+                                    ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit|Bash", 10), ("Stop", None, 10)):
         entries = hooks_cfg.setdefault(event, [])
-        if any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
+        ours = [e for e in entries if any(h.get("command") == command for h in e.get("hooks", []))]
+        if ours:
+            if matcher and ours[0].get("matcher") != matcher:  # an older install: widen its matcher in place
+                ours[0]["matcher"] = matcher
+                added.append(f"{event} matcher")
             continue
         entry: dict = {"matcher": matcher} if matcher else {}
         entry["hooks"] = [{"type": "command", "command": command, "timeout": timeout}]

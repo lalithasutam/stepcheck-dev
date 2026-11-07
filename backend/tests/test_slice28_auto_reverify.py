@@ -37,7 +37,7 @@ def test_additive_helper_in_a_base_module_reverifies_clean_dependents_in_kernel(
     v = kernel.commit(sid, "base", patch=[{"op": "append", "code": HELPER}])
     assert v.accepted and v.dirtied == []
     assert v.reverified == ["report", "shapes"]          # `import base` and `from base import area`
-    assert kernel.omission_report(sid) == {"dirty": [], "can_finalize": True}
+    assert kernel.omission_report(sid) == {"dirty": [], "rejected": [], "can_finalize": True}
     status = _status(kernel, sid)
     assert status["shapes"] == status["report"] == "VERIFIED"
     for dep in ("shapes", "report"):                     # a fresh attestation of the untouched bytes

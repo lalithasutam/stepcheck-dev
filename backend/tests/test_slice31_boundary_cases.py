@@ -74,7 +74,7 @@ def test_locked_module_dirtied_upstream_reverifies_with_its_locked_bytes(kernel,
     same = kernel.commit(sid, "user", kernel.node_source(sid, "user"))
     assert same.accepted, same.error
     assert _node(kernel, sid, "user")["status"] == "LOCKED"
-    assert kernel.omission_report(sid) == {"dirty": [], "can_finalize": True}
+    assert kernel.omission_report(sid) == {"dirty": [], "rejected": [], "can_finalize": True}
 
     mutated = kernel.commit(sid, "user", kernel.node_source(sid, "user") + "\nX = 1\n")
     assert not mutated.accepted and mutated.gate == "A" and "LOCKED" in str(mutated.error)

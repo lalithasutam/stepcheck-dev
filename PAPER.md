@@ -1,6 +1,6 @@
 # StepCheck: a deterministic context firewall and gated state engine for AI coding agents
 
-Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `16bbc4b` (post-slice).
+Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `cf99c2b` (post-slice).
 
 ## Abstract
 
@@ -88,7 +88,7 @@ Faults are synthetic AST mutations. All timings come from one Windows machine. T
 
 ## 4. Reproducibility
 
-`python -m pytest -q` (279 passed), `stepcheck ci .` (74 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
+`python -m pytest -q` (291 passed), `stepcheck ci .` (75 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
 
 ## 5. v0.2 campaign results
 
@@ -509,7 +509,7 @@ Green receipt after landing: 10 passed, 0 failed, 0 timed out.
 
 Backend LOC 7,399; audit over 131 sessions, 7,612 assistant turns, 95 cache-cliff turns, 5,876,819 re-billed tokens, $15.87 above cache-read.
 
-README / LAUNCH / CLAUDE.md / .cursorrules figures rewritten by `sync_docs.py` from receipts: 54 substitutions.
+README / LAUNCH / CLAUDE.md / .cursorrules figures rewritten by `sync_docs.py` from receipts: 49 substitutions.
 
 ## 6. Head-to-Head Market Ablation & SWE-bench Verified Analysis
 

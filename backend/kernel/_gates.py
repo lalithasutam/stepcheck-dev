@@ -101,15 +101,110 @@ def _def_bodies(tree: ast.Module) -> dict[str, list]:
 def _stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[str, str]]:
     """Defs whose real body the staged source turns into a skeleton stub — what a
     whole-file write copied from an OKF frame (unfocused bodies shown as `...`)
-    does. Python modules only."""
+    does. Python: `...` / `pass` / docstring-only. TS/JS, Go, Rust, Java: a brace
+    body that was at least two statements becomes empty, comment-only, a
+    placeholder macro (`todo!()`, `unimplemented!()`) or one trivial `return`
+    (`return;`, `return nil / null / 0 / "" / false / {} / []`)."""
     if not str(path).endswith((".py", ".pyi")):
-        return []
+        return _foreign_stubbed_bodies(path, old_source, new_source)
     try:
         old, new = _def_bodies(ast.parse(old_source)), _def_bodies(ast.parse(new_source))
     except SyntaxError:
         return []
     return [(name, kind) for name, body in old.items()
             if name in new and _stub_kind(body) is None and (kind := _stub_kind(new[name])) is not None]
+
+
+_TRIVIAL_RETURN = re.compile(
+    r"^return(\s+(nil|null|undefined|None|0|0\.0|-1|\"\"|''|``|false|true|\{\s*\}|\[\s*\]|\(\s*\)))?\s*;?$")
+_PLACEHOLDER = re.compile(r"^(todo|unimplemented|panic)!\s*\(.*\)\s*;?$|^throw new Error\((['\"]).*(TODO|implement|Remove this).*\2\)\s*;?$", re.S)
+
+
+def _brace_close(src: str, open_idx: int) -> int | None:
+    """Index of the `}` matching src[open_idx] == '{', skipping strings and comments."""
+    depth, i, n = 0, open_idx, len(src)
+    while i < n:
+        c = src[i]
+        if src.startswith("//", i):
+            i = src.find("\n", i)
+            if i < 0:
+                return None
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            if j < 0:
+                return None
+            i = j + 2
+            continue
+        if c in "\"'`" and not (c == "'" and not (i + 2 < n and (src[i + 1] == "\\" or src[i + 2] == "'"))):
+            j = i + 1  # a Rust lifetime `'a` is not a string; a char literal `'x'` / `'\n'` is
+            while j < n and src[j] != c:
+                j += 2 if src[j] == "\\" else 1
+            i = j + 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _body_statements(body: str) -> list[str]:
+    """Statement-ish lines of a brace body: comments and bare braces dropped."""
+    text = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    out = []
+    for line in text.splitlines():
+        line = re.sub(r"//.*$", "", line).strip().strip("{}").strip()
+        if line:
+            out.extend(p.strip() for p in line.split(";") if p.strip())
+    return out
+
+
+def _foreign_stub_kind(body: str) -> str | None:
+    stmts = _body_statements(body)
+    if not stmts:
+        return "comment-only" if body.strip() else "{}"
+    if len(stmts) == 1:
+        if _PLACEHOLDER.match(stmts[0]):
+            return stmts[0].split("(")[0] + "()"
+        if _TRIVIAL_RETURN.match(stmts[0]):
+            return stmts[0]
+    return None
+
+
+def _foreign_stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[str, str]]:
+    from . import _okf
+
+    mod = _okf.lang_module(path)
+    if mod is None:
+        return []
+
+    def bodies(src: str) -> dict[str, str]:
+        out: dict[str, str] = {}
+
+        def visit(d) -> None:
+            if getattr(d, "is_function", False) and getattr(d, "body_open", None) is not None:
+                close = _brace_close(src, d.body_open)
+                if close is not None:
+                    out.setdefault(d.dotted, src[d.body_open + 1: close])
+            for m in getattr(d, "members", None) or []:
+                visit(m)
+
+        try:
+            decls, _ = mod.parse(src)
+        except Exception:  # noqa: BLE001 — unparsable staged text is Gate A's business
+            return out
+        for d in decls:
+            visit(d)
+        return out
+
+    old, new = bodies(old_source), bodies(new_source)
+    return [(name, kind) for name, body in old.items()
+            if name in new and len(_body_statements(body)) >= 2 and _foreign_stub_kind(body) is None
+            and (kind := _foreign_stub_kind(new[name])) is not None]
 
 
 def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool, nodes=None) -> None:
