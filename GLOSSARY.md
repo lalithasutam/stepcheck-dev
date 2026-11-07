@@ -62,7 +62,8 @@ module. A patch that cannot fold is a `MechanicalError` at Gate A.
 
 **CommitVerdict** — What `commit()` returns: `accepted: bool`, `gate` (`"A" | "B" | "C" | None`),
 `error` (a `GateError` or `None`), `attestation` (envelope dict when accepted), `dirtied[]`
-(node_ids transitioned to `DIRTY_OMISSION_RISK`).
+(node_ids transitioned to `DIRTY_OMISSION_RISK`), `reverified[]` (dependents re-checked in memory
+and re-attested instead — see OmissionRisk).
 
 **PreservedSymbol** — A named AST element (decorator usage, guard clause marker, internal call,
 exported def) listed in a frame's `preserved_symbols[]`. Silently dropping one is an
@@ -72,6 +73,13 @@ exported def) listed in a frame's `preserved_symbols[]`. Silently dropping one i
 **OmissionRisk** — Node status `DIRTY_OMISSION_RISK`: a dependency's exported signature changed,
 so this node may silently rely on stale behavior. A session cannot finalize while any node holds
 this status; it clears only by checking the node out and re-committing it through all gates.
+**In-kernel re-verification:** for a Python dependency, a dependent whose *contract* is intact —
+no signature changed or removed among the names it imports (`from m import a`), or among the
+public exports for a module import (`import m`) — is not dirtied: if it is clean and its on-disk
+bytes still hash to what the session last attested, Gates A/B/C run on it in memory against the
+new state and, on a pass, its attestation is refreshed (`CommitVerdict.reverified[]`). Purely
+additive changes therefore dirty nothing. TS / Go / Rust / Java dependencies are always dirtied
+on an export change.
 
 **TokenFirewall** — Door 1 of the gateway: the BYOK proxy that intercepts bloated `messages[]`,
 commits verified steps into the StateKernel, prunes dead-end exploration history, injects the
@@ -127,10 +135,12 @@ Canonical state is always LF. Files that are not valid UTF-8 are left untracked.
 
 ## Telemetry terms
 
+Telemetry counts the read path only: a **turn** is a checkout. Commits (patches, whole-source
+writes, `sync` adoptions, in-kernel re-verification) charge nothing and add no turn.
 **raw_bloated_tokens** — tokens an unfirewalled agent would have paid: full re-read of every
-touched file per turn, *plus the 5-minute cache-cliff penalty* (a re-read later than 300s after
-the previous one is billed again at full input rate, not cache-hit rate).
-**compacted_okf_tokens** — tokens actually sent: CheckoutPayload sizes + committed diffs.
+file read so far on each turn, *plus the 5-minute cache-cliff penalty* (a re-read later than 300s
+after the previous one is billed again at full input rate, not cache-hit rate).
+**compacted_okf_tokens** — tokens actually returned to the agent: CheckoutPayload sizes.
 **dollar savings** — `(raw − compacted) / 1e6 × $3.00` (Sonnet-class input rate; constant lives
 in one place: `kernel/_telemetry.py`). Token counting is deterministic: `ceil(len(text)/4)`.
 

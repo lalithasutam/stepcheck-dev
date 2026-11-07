@@ -62,7 +62,7 @@ def test_rest_checkout_commit_lock_telemetry_roundtrip(client, project):
     assert rejected["accepted"] is False and rejected["gate"] == "A"
 
     t = client.get(f"/v1/step/telemetry/{sid}").json()
-    assert t["turns"] == 2  # one checkout + one accepted commit
+    assert t["turns"] == 1  # the one checkout: commits are the write path and charge no turn
     assert t["compacted_okf_tokens"] > 0
 
 

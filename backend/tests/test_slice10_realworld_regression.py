@@ -430,6 +430,7 @@ def test_rest_session_survives_a_gateway_restart(project):
 
     with TestClient(server.app) as client:
         sid = client.post("/v1/step/init", json={"project_root": str(project)}).json()["session_id"]
+        client.post("/v1/step/checkout", json={"session_id": sid, "node_id": "billing", "focus": []})
         out = client.post(
             "/v1/step/commit",
             json={"session_id": sid, "node_id": "billing",

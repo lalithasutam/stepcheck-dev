@@ -57,8 +57,9 @@ def test_checkouts_are_charged_in_memory_and_persisted_by_the_next_mutating_call
     kernel.checkout(sid, "billing", focus=[])
     kernel.lock_node(sid, "auth")  # a mutating call flushes on its own
     assert StateKernel().get_telemetry(sid).turns == 4
+    kernel.checkout(sid, "billing", focus=["charge"])  # charged in memory, not yet on disk
     assert kernel.commit(sid, "billing", patch=[{"op": "append", "code": "LIMIT = 1\n"}]).accepted
-    assert StateKernel().get_telemetry(sid).turns == 5
+    assert StateKernel().get_telemetry(sid).turns == 5  # the commit persisted it (commits add no turn)
 
     ephemeral = StateKernel(ephemeral=True)
     esid = ephemeral.init_session(project)

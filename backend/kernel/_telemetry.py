@@ -21,6 +21,12 @@ def compute(events: list[dict]) -> tuple[int, int, int]:
     `node_id`, `tokens` (what the firewall actually sent), `full_tokens`
     (the node's full-source size at that moment) and `at` (seconds; None means
     "same instant as the previous event").
+
+    Only the read path is context: a turn is a checkout, and `compacted` is the
+    frames checkouts returned to the agent. Commits — patches, whole-source
+    writes, `sync` adoptions of bytes an agent's own tool wrote, and the in-kernel
+    re-verification of dependents — charge nothing and add no turn; a commit
+    only updates the size a later raw re-read of an already-read file costs.
     """
     raw = 0
     compacted = 0
@@ -30,7 +36,13 @@ def compute(events: list[dict]) -> tuple[int, int, int]:
     clock = 0.0
 
     for ev in events:
-        if ev["kind"] not in ("checkout", "commit"):
+        if ev["kind"] == "commit":
+            if ev["node_id"] in touched:
+                touched[ev["node_id"]] = ev["full_tokens"]
+            if ev.get("at") is not None:
+                clock = ev["at"]
+            continue
+        if ev["kind"] != "checkout":
             continue
         turns += 1
         at = ev["at"] if ev.get("at") is not None else clock

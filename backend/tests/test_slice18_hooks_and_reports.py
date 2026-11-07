@@ -192,10 +192,15 @@ def test_hooks_installer_is_idempotent_and_the_script_allows_when_offline(tmp_pa
 def test_ci_report_is_deterministic_and_carries_provenance(kernel, project, tmp_path, capsys):
     sid = kernel.init_session(project)
     assert kernel.commit(sid, "billing", patch=[{"op": "append", "code": "def _h() -> int:\n    return 1\n"}]).accepted
-    v = kernel.commit(sid, "billing", patch=[{"op": "replace_symbol", "name": "refund", "code":
-        "def refund(user: str, amount_cents: int, reason: str = \"\") -> dict:\n"
-        "    return {\"user\": user, \"amount_cents\": -amount_cents, \"status\": \"refunded\", \"reason\": reason}\n"}])
-    assert v.accepted and v.dirtied == ["reports"]
+    # `reports` does `from billing import charge`: changing `charge` breaks its contract
+    # (a `refund` change would not since Slice 28 — reports is re-verified in-kernel then).
+    v = kernel.commit(sid, "billing", patch=[{"op": "replace_symbol", "name": "charge", "code":
+        "@require_auth\ndef charge(user: str, amount_cents: int, memo: str = \"\") -> dict:\n"
+        "    # okf-invariant: \"amount_cents <= 0\" in src and \"raise ValueError\" in src\n"
+        "    if amount_cents <= 0:\n        raise ValueError(\"amount must be positive\")\n"
+        "    if not check_permission(user, \"charge\"):\n        raise PermissionError(user)\n"
+        "    return {\"user\": user, \"amount_cents\": amount_cents, \"status\": \"charged\"}\n"}])
+    assert v.accepted and v.dirtied == ["reports"], v.error
     assert kernel.commit(sid, "reports", source=(project / "reports.py").read_text(encoding="utf-8")).accepted
     envelope = kernel.provenance(sid, "billing")
 

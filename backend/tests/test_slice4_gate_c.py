@@ -109,26 +109,28 @@ def test_get_telemetry_matches_hand_calculated_literal_example(kernel, tmp_path)
 
     sid = kernel.init_session(tmp_path)
     p_a = kernel.checkout(sid, "a", at=0.0)          # turn 1
-    assert kernel.commit(sid, "a", a_src, at=100.0).accepted   # turn 2
-    p_b = kernel.checkout(sid, "b", at=500.0)        # turn 3
-    assert kernel.commit(sid, "b", b_src, at=600.0).accepted   # turn 4
+    assert kernel.commit(sid, "a", a_src, at=100.0).accepted   # write path: no turn
+    p_b = kernel.checkout(sid, "b", at=200.0)        # turn 2
+    p_a2 = kernel.checkout(sid, "a", at=600.0)       # turn 3
+    assert kernel.commit(sid, "b", b_src, at=650.0).accepted   # write path: no turn
 
     t = kernel.get_telemetry(sid)
 
-    # Raw (unfirewalled) agent re-reads every touched file each turn; a re-read
-    # more than 300s after the last one bills full rate, else 10% cache rate:
-    #   turn 1 (t=0):   a never read            -> 200            = 200
-    #   turn 2 (t=100): a gap 100s <= 300       -> ceil(200*.1)   =  20
-    #   turn 3 (t=500): a gap 400s > 300 -> 200; b never -> 100   = 300
-    #   turn 4 (t=600): a gap 100 -> 20;  b gap 100 -> 10         =  30
-    assert t.raw_bloated_tokens == 200 + 20 + 300 + 30 == 550
+    # Only the read path is context (Slice 28): a turn is a checkout. The raw
+    # (unfirewalled) agent re-reads every file read so far on each turn; a
+    # re-read more than 300s after the last one bills full rate, else 10%:
+    #   turn 1 (t=0):   a never read                              = 200
+    #   turn 2 (t=200): a gap 200 <= 300 -> 20;  b never -> 100   = 120
+    #   turn 3 (t=600): a gap 400 > 300 -> 200;  b gap 400 -> 100 = 300
+    assert t.turns == 3
+    assert t.raw_bloated_tokens == 200 + 120 + 300 == 620
 
-    compacted = p_a.token_count + 200 + p_b.token_count + 100
+    compacted = p_a.token_count + p_b.token_count + p_a2.token_count  # frames returned, nothing else
     assert t.compacted_okf_tokens == compacted
-    assert t.tokens_saved == 550 - compacted
+    assert t.tokens_saved == 620 - compacted
     # $3.00 per million input tokens (kernel/_telemetry.py owns the constant).
-    assert t.dollars_saved == pytest.approx((550 - compacted) * 3.00 / 1_000_000)
-    assert t.turns == 4
+    assert t.dollars_saved == pytest.approx((620 - compacted) * 3.00 / 1_000_000)
+    assert t.turns == 3
     assert t.omissions_blocked == 0
 
 

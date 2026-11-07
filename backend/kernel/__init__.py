@@ -126,6 +126,9 @@ class CommitVerdict:
     error: GateError | None
     attestation: dict | None
     dirtied: list[str]
+    # Dependents re-run through Gates A/B/C in memory against this commit and
+    # re-attested (untouched bytes, contract intact) instead of being dirtied.
+    reverified: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -621,27 +624,42 @@ class StateKernel:
         sent_tokens: int,
     ) -> CommitVerdict:
         exports_changed = staged_info.exports != node.info.exports
+        removed_exports = set(node.info.exports) - set(staged_info.exports)  # gone, or signature moved
         # `exports` covers public names; a dependent that spells
         # `from m import _helper` relies on that private signature just as much.
         before, after = _okf._signatures(node.info.source), _okf._signatures(staged_info.source)
+        changed = {name for name, sig in before.items() if after.get(name) != sig}
+        python = _okf.lang_module(node.info.path) is None
         modules = self._modules(s)
         node.info = staged_info
         node.status = VERIFIED
+        commit_ordinal = 1 + sum(1 for e in s.events if e["kind"] == "commit")
 
         dirtied: list[str] = []
+        reverified: list[str] = []
         for dep_id, dep in sorted(s.nodes.items()):
             if dep_id == node.info.node_id or node.info.node_id not in dep.info.deps:
                 continue
-            if not exports_changed:
-                imported = _okf.resolve_imports(
-                    dep_id, dep.info.path, dep.info.source, modules
-                ).get(node.info.node_id, set())
-                if not any(n and n.startswith("_") and before.get(n) != after.get(n) for n in imported):
+            imported = _okf.resolve_imports(
+                dep_id, dep.info.path, dep.info.source, modules
+            ).get(node.info.node_id, set())
+            # The contract a dependent relies on: the names it imports (`from m
+            # import a`), or every public export for a module import (`import m`).
+            # Signatures are compared for Python only; for TS / Go / Rust / Java
+            # any export change still dirties every importer (no re-verification).
+            if python:
+                broken = bool(imported & changed) if imported else bool(removed_exports)
+            else:
+                broken = exports_changed
+            if not broken:
+                if not exports_changed:
+                    continue  # nothing the dependent can see moved
+                if self._reverify(s, dep, modules, commit_ordinal):
+                    reverified.append(dep_id)
                     continue
             dep.status = DIRTY
             dirtied.append(dep_id)
 
-        commit_ordinal = 1 + sum(1 for e in s.events if e["kind"] == "commit")
         envelope = _dsse_envelope(
             node.info.node_id,
             node.info.path,
@@ -659,13 +677,50 @@ class StateKernel:
                 "tokens": sent_tokens,  # the folded diff actually sent
                 "full_tokens": _tokens.count(staged_info.source),
                 "dirtied": list(dirtied),
+                "reverified": list(reverified),
                 "at": at,
             }
         )
         self._flush(s)
         return CommitVerdict(
-            accepted=True, gate=None, error=None, attestation=envelope, dirtied=dirtied
+            accepted=True, gate=None, error=None, attestation=envelope, dirtied=dirtied,
+            reverified=reverified,
         )
+
+    def _reverify(self, s: _Session, dep: _Node, modules: dict[str, str], ordinal: int) -> bool:
+        """Re-run Gates A -> B -> C on an untouched dependent against the session's
+        new state, in memory (no write, no context tokens). Only a dependent that
+        is currently clean and whose on-disk bytes still hash to what the session
+        last attested qualifies; on a pass its attestation is refreshed for the
+        same bytes and it stays VERIFIED. Returns whether it passed."""
+        if dep.status in (DIRTY, REJECTED) or dep.disk_sha256 is None:
+            return False
+        try:
+            if _sha256((s.root / dep.info.path).read_bytes()) != dep.disk_sha256:
+                return False  # changed behind the session: the agent must look at it
+        except OSError:
+            return False
+        dep_id, source = dep.info.node_id, dep.info.source
+        try:
+            # Same bytes, so a lock is not being violated: Gate A checks syntax
+            # and the names this dependent's own dependents import.
+            _gates.gate_a(dep_id, False, source, s.nodes)
+            staged = _okf.analyze(dep_id, dep.info.path, source, modules)
+            _gates.gate_b(dep, staged, source, source, False)
+            _gates.gate_c(
+                dep_id,
+                dep.info.invariants,
+                source,
+                {nid: n.info.source for nid, n in s.nodes.items() if nid != dep_id},
+                mined=dep.info.mined_invariants,
+                project_paths={nid: n.info.path for nid, n in s.nodes.items()},
+            )
+        except GateError:
+            return False
+        dep.info = staged
+        dep.status = VERIFIED
+        dep.verified.append(_dsse_envelope(dep_id, dep.info.path, dep.disk_sha256, staged.exports, ordinal))
+        return True
 
     # -- internals --------------------------------------------------------
 

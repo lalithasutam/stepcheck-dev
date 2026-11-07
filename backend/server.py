@@ -90,6 +90,7 @@ def _verdict_json(verdict) -> dict:
         "subtype": getattr(verdict.error, "subtype", None),
         "attestation": verdict.attestation,
         "dirtied": verdict.dirtied,
+        "reverified": verdict.reverified,
     }
 
 
