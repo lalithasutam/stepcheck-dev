@@ -486,6 +486,8 @@ def attr_tag(attr: str) -> str:
 class GuardRule:
     paren_condition: bool  # Java / TS: `if (cond)`; Go / Rust: `if cond {`
     effects: tuple[tuple[str, str], ...]  # (first token(s) of the consequence, effect label); "" label = use next identifier
+    assert_keyword: bool = False  # Java: `assert cond;` / `assert cond : message;`
+    assert_macros: tuple[str, ...] = ()  # Rust: `assert!(…)`, `assert_eq!(…)`, …
 
 
 def _consequence(sig: list[Tok], k: int, depth: int) -> tuple[list[Tok], int]:
@@ -532,11 +534,18 @@ def _effect(cons: list[Tok], rule: GuardRule) -> str | None:
     return None if head else None
 
 
-def guards_in(sig: list[Tok], open_idx: int, close_idx: int, rule: GuardRule, leading_only: bool) -> list[str]:
+def guards_in(sig: list[Tok], open_idx: int, close_idx: int, rule: GuardRule, leading_only: bool,
+              *, mining: bool = False, top_depth: int | None = None) -> list[str]:
     """`<cond> <effect>` strings for guard clauses in a body: the leading run of
-    `if` statements (leading_only) or every `if` guard at any depth."""
+    `if` statements (leading_only) or every guard at any depth — the same definition
+    Python's miner uses: an abort (`throw`, `panic`, `return Err`, an assertion) is a
+    guard wherever it sits; an early `return` is one only as a direct branch of the
+    function body when `mining` (inside a loop it is control flow), while the
+    presence check (`mining=False`) counts a return anywhere."""
     out: list[str] = []
     depth = sig[open_idx].depth + 1
+    if top_depth is None:
+        top_depth = depth
     j = open_idx + 1
     while j < close_idx:
         t = sig[j]
@@ -545,6 +554,18 @@ def guards_in(sig: list[Tok], open_idx: int, close_idx: int, rule: GuardRule, le
         if t.depth == depth:
             if t.kind == "id" and t.text == "if":
                 g, nxt = _guard_at(sig, j, depth, rule)
+                if g is not None and mining and depth != top_depth and g.rsplit(" ", 1)[-1].startswith("returns") \
+                        and not g.endswith(" Err"):
+                    g = None  # a nested early return is control flow, not a guard
+                if g is not None:
+                    out.append(g)
+                    j = max(nxt, j + 1)
+                    continue
+                if leading_only:
+                    break
+            elif t.kind == "id" and ((rule.assert_keyword and t.text == "assert")
+                                     or (t.text in rule.assert_macros and j + 1 < len(sig) and sig[j + 1].text == "!")):
+                g, nxt = _assert_at(sig, j, depth, rule)
                 if g is not None:
                     out.append(g)
                     j = max(nxt, j + 1)
@@ -560,11 +581,43 @@ def guards_in(sig: list[Tok], open_idx: int, close_idx: int, rule: GuardRule, le
                     if sig[q].kind == "punct" and sig[q].text == "{" and sig[q].depth >= depth:
                         close = matching_close(sig, q)
                         if close is not None and close <= end:
-                            out.extend(guards_in(sig, q, close, rule, False))
+                            out.extend(guards_in(sig, q, close, rule, False, mining=mining, top_depth=top_depth))
             j = end + 1
             continue
         j += 1
     return out
+
+
+def _assert_at(sig: list[Tok], j: int, depth: int, rule: GuardRule) -> tuple[str | None, int]:
+    """`assert <cond>` for a Java `assert cond[: message];` or a Rust `assert!(…)`
+    family macro at sig[j]; the normalized condition keeps the macro's spelling."""
+    if sig[j].text == "assert" and rule.assert_keyword and not (j + 1 < len(sig) and sig[j + 1].text == "!"):
+        end = statement_end(sig, j, depth)
+        toks = sig[j + 1: end + 1]
+        cond: list[Tok] = []
+        for t in toks:
+            if t.depth == depth and t.kind == "punct" and t.text in (":", ";"):
+                break
+            cond.append(t)
+        if not cond:
+            return None, j
+        return "assert " + "".join(t.text for t in cond if t.kind != "comment"), end + 1
+    # Rust: `name ! ( … )`
+    k = j + 2
+    if k >= len(sig) or sig[k].text != "(":
+        return None, j
+    close = None
+    for q in range(k + 1, len(sig)):
+        if sig[q].depth == depth + 1 and sig[q].kind == "punct" and sig[q].text == ")":
+            close = q
+            break
+        if sig[q].depth <= depth:
+            break
+    if close is None:
+        return None, j
+    inner = "".join(t.text for t in sig[k + 1: close] if t.kind != "comment")
+    end = statement_end(sig, j, depth)
+    return f"{sig[j].text}!({inner})", max(end + 1, close + 1)
 
 
 def _guard_at(sig: list[Tok], j: int, depth: int, rule: GuardRule) -> tuple[str | None, int]:
@@ -593,6 +646,10 @@ def _guard_at(sig: list[Tok], j: int, depth: int, rule: GuardRule) -> tuple[str 
         if q >= len(sig):
             return None, j
         cond = sig[k:q]
+        # Go's short statement `if v, ok := m[k]; !ok {`: the condition follows the last `;`
+        semis = [i for i, t in enumerate(cond) if t.depth == depth and t.kind == "punct" and t.text == ";"]
+        if semis:
+            cond = cond[semis[-1] + 1:]
         k = q
     if k >= len(sig):
         return None, j
@@ -607,8 +664,10 @@ def _guard_at(sig: list[Tok], j: int, depth: int, rule: GuardRule) -> tuple[str 
     return f"{cond_norm} {effect}", nxt
 
 
-def mine_guards(sig: list[Tok], decls: list[Decl], rule: GuardRule, *, leading_only: bool) -> list[str]:
-    """`guard:<symbol>:<cond> <effect>` for every function-like declaration and member."""
+def mine_guards(sig: list[Tok], decls: list[Decl], rule: GuardRule, *, leading_only: bool, mining: bool = False) -> list[str]:
+    """`guard:<symbol>:<cond> <effect>` for every function-like declaration and member.
+    `mining=True` is the miner's side (nested early returns are control flow);
+    the default is the presence check, which counts every guard anywhere."""
     index = {t.start: i for i, t in enumerate(sig)}
     out: list[str] = []
 
@@ -617,7 +676,7 @@ def mine_guards(sig: list[Tok], decls: list[Decl], rule: GuardRule, *, leading_o
             oi = index[d.body_open]
             ci = matching_close(sig, oi)
             if ci is not None:
-                for g in guards_in(sig, oi, ci, rule, leading_only):
+                for g in guards_in(sig, oi, ci, rule, leading_only, mining=mining):
                     inv = f"guard:{d.dotted}:{g}"
                     if inv not in out:
                         out.append(inv)

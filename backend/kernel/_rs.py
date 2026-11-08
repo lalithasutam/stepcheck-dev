@@ -21,7 +21,8 @@ SUFFIXES = (".rs",)
 EXCLUDED_DIRS = frozenset({"target"})
 SPEC = C.Spec("rust", FENCE, lifetimes=True, rust_raw=True)
 RULE = C.GuardRule(paren_condition=False, effects=(("panic !", "panics"), ("return Err", "returns Err"), ("return", "returns"),
-                                                   ("bail !", "bails"), ("unreachable !", "panics"), ("todo !", "panics")))
+                                                   ("bail !", "bails"), ("unreachable !", "panics"), ("todo !", "panics")),
+                   assert_macros=("assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne"))
 _MODIFIERS = frozenset({"pub", "async", "unsafe", "const", "extern", "default"})
 _KINDS = frozenset({"fn", "struct", "enum", "trait", "impl", "type", "const", "static", "union", "mod"})
 
@@ -271,7 +272,7 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
 def mine_guards(src: str) -> list[str]:
     decls, _ = parse(src)
     sig = [t for t in C.tokenize(src, SPEC) if t.kind != "comment"]
-    return C.mine_guards(sig, decls, RULE, leading_only=True)
+    return C.mine_guards(sig, decls, RULE, leading_only=False, mining=True)
 
 
 def present_guards(src: str) -> set[str]:

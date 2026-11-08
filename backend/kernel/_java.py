@@ -19,7 +19,7 @@ FENCE = "java"
 SUFFIXES = (".java",)
 EXCLUDED_DIRS = frozenset({"build", "target", ".gradle"})
 SPEC = C.Spec("java", FENCE, text_blocks=True, ops=("...", "::", "->", "==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/="))
-RULE = C.GuardRule(paren_condition=True, effects=(("throw", ""),))
+RULE = C.GuardRule(paren_condition=True, effects=(("throw", ""), ("return", "returns")), assert_keyword=True)
 _MODIFIERS = frozenset({"public", "protected", "private", "static", "final", "abstract", "sealed", "non-sealed", "strictfp",
                         "synchronized", "native", "default", "transient", "volatile"})
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record"})
@@ -219,7 +219,7 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
 def mine_guards(src: str) -> list[str]:
     decls, _ = parse(src)
     sig = [t for t in C.tokenize(src, SPEC) if t.kind != "comment"]
-    return C.mine_guards(sig, decls, RULE, leading_only=True)
+    return C.mine_guards(sig, decls, RULE, leading_only=False, mining=True)
 
 
 def present_guards(src: str) -> set[str]:

@@ -649,17 +649,111 @@ def _structural_guards(node_id: str, guard_invariants: list[str], staged_source:
 
     path = (project_paths or {}).get(node_id, f"{node_id}.py")
     present = _okf.present_guards(staged_source, path)
-    kind = "guard clause" if _okf.lang_module(path) is None else "leading guard clause"
+    python = _okf.lang_module(path) is None
+    kind = "guard clause"
+    # Python conditions are compared in canonical form (constants right, commuted
+    # operands, `isinstance(x, (T,))`, negations pushed inward): an equivalent spelling
+    # is the same guard. The stored clause keeps the spelling it was mined in.
+    canon = canonical_guard if python else (lambda inv: inv)
+    present_c = {canon(p) for p in present}
     gone = _dead_roots({inv.split(":", 2)[1].split(".")[0] for inv in guard_invariants}, staged_source, path)
     for inv in guard_invariants:
-        if inv not in present and (inv.split(":", 2)[1].split(".")[0] in gone
-                                   or _assert_waived(inv, staged_source, present, path)):
+        held = inv in present or canon(inv) in present_c
+        if not held and (inv.split(":", 2)[1].split(".")[0] in gone
+                         or _assert_waived(inv, staged_source, present, path)):
             continue  # its symbol was removed as dead code (Gate B vetted that), or an assert waiver
-        if inv not in present:
+        if not held:
             raise LogicalError(
                 f"staged diff violates frame invariant {inv!r} of '{node_id}' "
                 f"(auto-mined {kind} removed or weakened)"
             )
+
+
+_MIRROR = {ast.Lt: ast.Gt, ast.Gt: ast.Lt, ast.LtE: ast.GtE, ast.GtE: ast.LtE,
+           ast.Eq: ast.Eq, ast.NotEq: ast.NotEq, ast.Is: ast.Is, ast.IsNot: ast.IsNot}
+
+
+def _is_constant(node: ast.expr) -> bool:
+    """A literal: a constant, or a tuple / frozenset / set display of literals."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, (ast.Tuple, ast.Set)):
+        return all(_is_constant(e) for e in node.elts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "frozenset" \
+            and len(node.args) == 1 and not node.keywords:
+        return _is_constant(node.args[0])
+    return False
+
+
+class _Canonical(ast.NodeTransformer):
+    """Grammar- and Boolean-algebra-level identities only, nothing semantic:
+    a single comparison puts its literal on the right (mirroring a directional
+    operator) and otherwise orders commutable operands deterministically;
+    `isinstance` / `issubclass` unwrap a one-element type tuple; `not` is pushed
+    inward — the inverse comparison operator, De Morgan over `and` / `or`, a double
+    negation cancelled."""
+
+    def visit_Compare(self, node: ast.Compare) -> ast.expr:
+        self.generic_visit(node)
+        if len(node.ops) != 1 or type(node.ops[0]) not in _MIRROR:
+            return node
+        left, right, op = node.left, node.comparators[0], node.ops[0]
+        lc, rc = _is_constant(left), _is_constant(right)
+        swap = (lc and not rc) or (lc == rc and ast.unparse(left) > ast.unparse(right))
+        if swap:
+            return ast.Compare(left=right, ops=[_MIRROR[type(op)]()], comparators=[left])
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.expr:
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id in ("isinstance", "issubclass") and len(node.args) == 2:
+            spec = node.args[1]
+            while isinstance(spec, ast.Tuple) and len(spec.elts) == 1:
+                spec = spec.elts[0]
+            node.args[1] = spec
+        return node
+
+    def visit_UnaryOp(self, node: ast.UnaryOp) -> ast.expr:
+        self.generic_visit(node)
+        if not isinstance(node.op, ast.Not):
+            return node
+        inner = node.operand
+        if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, ast.Not):
+            return inner.operand
+        if isinstance(inner, ast.Compare) and len(inner.ops) == 1 and type(inner.ops[0]) in _FLIP:
+            return self.visit(ast.Compare(left=inner.left, ops=[_FLIP[type(inner.ops[0])]()], comparators=inner.comparators))
+        if isinstance(inner, ast.BoolOp):
+            op = ast.Or() if isinstance(inner.op, ast.And) else ast.And()
+            return ast.BoolOp(op=op, values=[self.visit(ast.UnaryOp(op=ast.Not(), operand=v)) for v in inner.values])
+        return node
+
+
+def canonical_condition(cond: ast.expr) -> str:
+    return ast.unparse(ast.fix_missing_locations(_Canonical().visit(cond)))
+
+
+_CLAUSE_RE = re.compile(r"^(if )(.*?)( raises .*| returns .*)( #\d+)?$|^(assert )(.*?)( #\d+)?$", re.S)
+
+
+def canonical_guard(inv: str) -> str:
+    """`guard:<sym>:<clause>` with the clause's condition in canonical form; any
+    other invariant, or an unparsable condition, is returned unchanged."""
+    try:
+        kind, sym, clause = inv.split(":", 2)
+    except ValueError:
+        return inv
+    m = _CLAUSE_RE.match(clause)
+    if not m:
+        return inv
+    if m.group(1):
+        head, cond, tail, num = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+    else:
+        head, cond, tail, num = m.group(5), m.group(6), "", m.group(7) or ""
+    try:
+        canon = canonical_condition(ast.parse(cond, mode="eval").body)
+    except (SyntaxError, ValueError):
+        return inv
+    return f"{kind}:{sym}:{head}{canon}{tail}{num}"
 
 
 def _dead_roots(roots: set[str], staged_source: str, path: str) -> set[str]:
@@ -740,4 +834,5 @@ def _assert_waived(inv: str, staged_source: str, present: set[str], path: str) -
                 for a in n.names})
     if used and not used <= alive:
         return True
-    return any(p.startswith(f"guard:{sym}:if {neg} raises ") for neg in _negations(cond) for p in present)
+    negs = {canonical_condition(ast.parse(neg, mode="eval").body) for neg in _negations(cond)}
+    return any(canonical_guard(p).startswith(f"guard:{sym}:if {neg} raises ") for neg in negs for p in present)

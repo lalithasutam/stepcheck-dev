@@ -226,7 +226,7 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
 def mine_guards(src: str) -> list[str]:
     decls, _ = parse(src)
     sig = [t for t in C.tokenize(src, SPEC) if t.kind != "comment"]
-    return C.mine_guards(sig, decls, RULE, leading_only=True)
+    return C.mine_guards(sig, decls, RULE, leading_only=False, mining=True)
 
 
 def present_guards(src: str) -> set[str]:

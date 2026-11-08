@@ -750,7 +750,7 @@ def _member_line(m: Decl) -> str:
 def _guard_rule():
     from . import _cstyle as C
 
-    return C.GuardRule(paren_condition=True, effects=(("throw", ""),))
+    return C.GuardRule(paren_condition=True, effects=(("throw", ""), ("return", "returns")))
 
 
 def mine_guards(src: str) -> list[str]:
@@ -761,7 +761,7 @@ def mine_guards(src: str) -> list[str]:
 
     decls, _ = parse(src)
     sig = [t for t in tokenize(src) if t.kind != "comment"]
-    return C.mine_guards(sig, decls, _guard_rule(), leading_only=True)
+    return C.mine_guards(sig, decls, _guard_rule(), leading_only=False, mining=True)
 
 
 def present_guards(src: str) -> set[str]:

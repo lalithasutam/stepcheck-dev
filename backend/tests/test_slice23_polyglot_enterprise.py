@@ -308,7 +308,8 @@ def test_stepcheck_ci_verifies_a_go_project(go_project, capsys):
     rc = cli.main(["ci", str(go_project)])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "account" in out and "server" in out and "2 modules verified" in out and "2 invariants executed" in out
+    # 3 since Slice 35: NewServer's `if err != nil { return nil, err }` follows an assignment and is a guard too
+    assert "account" in out and "server" in out and "2 modules verified" in out and "3 invariants executed" in out
 
 
 # =============================================================== Rust
