@@ -326,8 +326,11 @@ def main(argv: list[str] | None = None) -> int:
     cn.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
     cn.set_defaults(fn=cmd_connect)
 
-    cp = sub.add_parser("compliance", help="export the dual-use compliance bundle: DUC.json (public card, hashes and "
-                                         "counts only) + DUA-E.json (escrowed in-toto envelopes and control mappings)")
+    cp = sub.add_parser("compliance", help="export the session's attestation as a standard in-toto Statement v1 "
+                                         "(attestation.intoto.json: subject = every tracked file + sha256, predicate = "
+                                         "gate verdicts, invariants, Merkle root, DSSE envelopes, control mappings), "
+                                         "plus the dual-use pair DUC.json (public card, hashes and counts only) and "
+                                         "DUA-E.json (escrowed envelopes and controls)")
     cp.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
     cp.add_argument("--out", default="stepcheck-compliance", help="output directory (default: ./stepcheck-compliance)")
     cp.set_defaults(fn=cmd_compliance)
@@ -542,13 +545,17 @@ hook payload (stdin JSON) to the warm gateway endpoint and prints its answer.
 Gateway unreachable: Edit / Write / MultiEdit / NotebookEdit and Stop are decided
 in-process by the same policy (`backend/hooks.py`: Gates A, B and C against the
 project's session), so a dead socket never lets a broken write through. Read stays
-fail-open offline (the skeleton swap saves tokens; it is not a safety gate), and
-so does every event when no StepCheck install can be found (STEPCHECK_BACKEND,
-an installed `backend` package, or $CLAUDE_PROJECT_DIR/backend) or the kernel
-itself fails — one line on stderr says so.
+fail-open offline (online, a Read of a large tracked module is allowed and rides
+the module's causal-cone frame and Gate C invariants as additionalContext;
+STEPCHECK_STRICT_READ=1 swaps the Read for the skeleton instead — neither is a
+safety gate), and so does every event when no StepCheck install can be found
+(STEPCHECK_BACKEND, an installed `backend` package, or $CLAUDE_PROJECT_DIR/backend)
+or the kernel itself fails — one line on stderr says so.
 
 A gate denial on an editing tool prints the structured PreToolUse deny and exits 2:
-Claude Code blocks the call before any byte lands and hands stderr to the agent.
+Claude Code blocks the call before any byte lands and hands stderr to the agent —
+the `[STEPCHECK CATCH — Gate X] <module> (<symbol>): …` banner, also appended to
+<project>/.stepcheck/catches.jsonl by the policy.
 
 Offline is detected with a 15 ms connect probe on the loopback socket
 (STEPCHECK_HOOK_CONNECT_TIMEOUT), before anything beyond the standard library is
@@ -788,6 +795,11 @@ def _emit(event, out) -> int:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # the answer and the banner are UTF-8 whatever the console code page
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     try:
         event = json.loads(sys.stdin.read() or "{}")
     except ValueError:
@@ -990,12 +1002,16 @@ def _audit_card_md(total: dict) -> str:
 
 
 def cmd_compliance(args: argparse.Namespace) -> int:
-    """`stepcheck compliance [path] --out <dir>`: DUC.json (public dual-use card:
-    repo digest, language counts, gate verdicts, invariant counts, DSSE Merkle
-    root, self-verified zero path/code leakage) and DUA-E.json (escrowed bundle:
-    every in-toto Statement v1 envelope, the Merkle tree, control mappings for
-    OWASP AISVS 1.0 C9.3, SOC 2 CC8.1, PCI DSS 4.0 6.3.2 and EU AI Act Art. 12).
-    Enterprise tier when licensing is enforced. Exit 1 without a session."""
+    """`stepcheck compliance [path] --out <dir>`: attestation.intoto.json first — a
+    standard in-toto Statement v1 (subject: every tracked file and its sha256;
+    predicate: gate verdicts, invariant counts, the Merkle root, each module's
+    status and latest attestation, the per-node DSSE envelopes, control mappings
+    for OWASP AISVS 1.0 C9.3, SOC 2 CC8.1, PCI DSS 4.0 6.3.2 and EU AI Act
+    Art. 12) — then the dual-use pair: DUC.json (public card: repo digest,
+    language counts, gate verdicts, invariant counts, DSSE Merkle root,
+    self-verified zero path/code leakage) and DUA-E.json (escrowed bundle: the
+    envelopes, the Merkle tree, the controls). Enterprise tier when licensing is
+    enforced. Exit 1 without a session."""
     import json
 
     import licensing
@@ -1013,6 +1029,11 @@ def cmd_compliance(args: argparse.Namespace) -> int:
         return 1
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    statement = bundle["Statement"]
+    data = json.dumps(statement, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+    (out / "attestation.intoto.json").write_bytes(data.encode("utf-8"))
+    print(f"wrote {out / 'attestation.intoto.json'} (in-toto Statement v1, {len(statement['subject'])} subjects, "
+          f"{len(data.encode('utf-8')):,} bytes)")
     for name, doc in (("DUC.json", bundle["DUC"]), ("DUA-E.json", bundle["DUA-E"])):
         data = json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
         (out / name).write_bytes(data.encode("utf-8"))

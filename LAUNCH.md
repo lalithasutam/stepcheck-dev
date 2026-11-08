@@ -6,7 +6,7 @@ Every number below is read from the repo as it stands, not rounded up:
 | --- | --- | --- |
 | Kernel + gateway + CLI + audit | ≈7,400 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
 | License | Apache-2.0 (`LICENSE`, `NOTICE`, `pyproject.toml`); the whole repo is the open core | `LICENSE` |
-| Tests | 291, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
+| Tests | 297, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
 | 50-turn benchmark | 120,815 raw → 14,048 compacted tokens, 88.4% saved, $0.3203 at $3.00/MTok | `benchmarks/results.json` |
 | Real-log audit | 131 Claude Code sessions, 7,612 assistant turns, 95 cache-cliff resumes re-writing 5,876,819 tokens, $15.87 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
@@ -16,6 +16,31 @@ Don't quote 88.7%, 88.5%, 0.29s, "1,700 LOC", "32 tests" or "59 tests" anywhere.
 ---
 
 ## 0. Positioning: the two hair-on-fire problems
+
+**Catches what your tests don't cover.** Test-driven agent gates and static AI-defect scanners (Skylos,
+linters) catch a regression only when a unit test fails or a generic lint rule fires; they miss a dropped
+domain guard (`if currency == "JPY": return amount`), a flipped boundary (`<=` → `<`) and a neutered raise
+(`raise` → `return None`) in untested code. StepCheck auto-mines per-function Gate C invariants from the AST
+(`guard:` clauses, executable `call:` probes) and enforces them in about 15 ms before disk writeback, cuts
+read tokens by 75–89% with causal-cone AST slicing, and emits standard in-toto Statement v1 provenance
+(`attestation.intoto.json`).
+
+**Skylos 4.50.1 vs StepCheck on 239 untested faults** — the external certification corpus (CanItEdit,
+psf/requests, pallets/flask), no covering unit test, Skylos run as `skylos . -a --ai-defects --json` with
+any new finding in the mutated file counted as a catch; StepCheck = `StateKernel.commit` rejected at Gate B/C.
+Receipt: `.stepcheck/discovery/receipts/skylos_vs_stepcheck.json`.
+
+| Fault, no covering test | Cases | Skylos 4.50.1 | StepCheck Gate B/C |
+| --- | ---: | ---: | ---: |
+| dropped guard (CanItEdit) | 16 | 6 (37.5%) | 16 (100%) |
+| dropped guard in the wild (requests/flask) | 34 | 6 (17.6%) | 34 (100%) |
+| body stubbed to `...` | 65 | 56 (86.2%) | 65 (100%) |
+| `@overload` / decorator stripped | 18 | 6 (33.3%) | 18 (100%) |
+| boundary flipped in an `if` guard or `assert` | 18 | 0 (0%) | 18 (100%) |
+| `raise` neutered to `pass` / `return None` | 26 | 1 (3.8%) | 26 (100%) |
+| `if False and cond` short-circuit | 26 | 26 (100%) | 26 (100%) |
+| `except` widened (raise kept / swallowed) | 36 | 17 (47.2%) | 36 (100%) |
+| **all** | **239** | **118 (49.4%)** | **239 (100%)** |
 
 **Individual developer — the turn-25 brain-melt and wallet bleed.** By the time a session reaches its
 twenty-fifth turn, tens of thousands of tokens of stale file reads sit in context and the model's attention
@@ -44,8 +69,8 @@ driven by trivial edits over uncompacted history.
 **Four tiers:** open core (free, Apache-2.0: audit, hooks, gateway, gates, MCP, Studio) · Pro FinOps proxy
 ($19/mo or 15% of verified savings: all-turn compaction, cache-cliff shield, `x-stepcheck-tier: auto`) ·
 Team PR & FinOps ($39/seat/mo: GitHub Action PR bot, `GET /v1/team/summary`, org-wide Pin & Lock) ·
-Enterprise Trust Ledger ($79/seat/mo or self-hosted: polyglot verification, `stepcheck compliance` DUC /
-DUA-E bundles). Enforcement is opt-in via `STEPCHECK_REQUIRE_KEY=1`; the default install asks for no key.
+Enterprise Trust Ledger ($79/seat/mo or self-hosted: polyglot verification, `stepcheck compliance` in-toto
+Statement v1 + DUC / DUA-E bundles). Enforcement is opt-in via `STEPCHECK_REQUIRE_KEY=1`; the default install asks for no key.
 
 ---
 
@@ -73,7 +98,7 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 291 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 297 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
@@ -120,7 +145,7 @@ C logical (invariants over normalized src, the AST, and the exec-loaded module)
 
 6/ T25 is the one I like. Legit signature change on payments.charge. Accepted. But api and workers go amber (DIRTY_OMISSION_RISK) and finalize is refused until both are re-verified. The thing agents never do on their own.
 
-7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 291 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
+7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 297 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
 
 8/ Try the interactive replay, no install, works on your phone: https://lalithasutam.github.io/stepcheck-dev/
 Repo: https://github.com/lalithasutam/stepcheck-dev
@@ -176,7 +201,7 @@ Link straight to a moment with the hash: `#t20`, `#t25`, `#t35`, `#t36`. Regener
 ```bash
 cd stepcheck-dev && pip install -e . && (cd frontend && npm install && npm run build) && (cd backend && python -m pytest -q) && stepcheck up
 ```
-Expect `291 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
+Expect `297 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
 
 **2. Connect Claude Code (or Cursor) to the MCP server** (second terminal)
 ```bash

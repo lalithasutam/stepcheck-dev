@@ -5,13 +5,17 @@ hook payload (stdin JSON) to the warm gateway endpoint and prints its answer.
 Gateway unreachable: Edit / Write / MultiEdit / NotebookEdit and Stop are decided
 in-process by the same policy (`backend/hooks.py`: Gates A, B and C against the
 project's session), so a dead socket never lets a broken write through. Read stays
-fail-open offline (the skeleton swap saves tokens; it is not a safety gate), and
-so does every event when no StepCheck install can be found (STEPCHECK_BACKEND,
-an installed `backend` package, or $CLAUDE_PROJECT_DIR/backend) or the kernel
-itself fails — one line on stderr says so.
+fail-open offline (online, a Read of a large tracked module is allowed and rides
+the module's causal-cone frame and Gate C invariants as additionalContext;
+STEPCHECK_STRICT_READ=1 swaps the Read for the skeleton instead — neither is a
+safety gate), and so does every event when no StepCheck install can be found
+(STEPCHECK_BACKEND, an installed `backend` package, or $CLAUDE_PROJECT_DIR/backend)
+or the kernel itself fails — one line on stderr says so.
 
 A gate denial on an editing tool prints the structured PreToolUse deny and exits 2:
-Claude Code blocks the call before any byte lands and hands stderr to the agent.
+Claude Code blocks the call before any byte lands and hands stderr to the agent —
+the `[STEPCHECK CATCH — Gate X] <module> (<symbol>): …` banner, also appended to
+<project>/.stepcheck/catches.jsonl by the policy.
 
 Offline is detected with a 15 ms connect probe on the loopback socket
 (STEPCHECK_HOOK_CONNECT_TIMEOUT), before anything beyond the standard library is
@@ -251,6 +255,11 @@ def _emit(event, out) -> int:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # the answer and the banner are UTF-8 whatever the console code page
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     try:
         event = json.loads(sys.stdin.read() or "{}")
     except ValueError:

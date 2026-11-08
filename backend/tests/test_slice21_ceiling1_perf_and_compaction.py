@@ -132,7 +132,8 @@ def test_hook_read_deny_with_a_real_skeleton_checkout_is_under_25ms_p95(client, 
         (project / f"mod{i}.py").write_text(f"def f{i}(x: int) -> int:\n    if x < 0:\n        raise ValueError(x)\n    return x + {i}\n",
                                             encoding="utf-8", newline="\n")
     sid = client.post("/v1/step/init", json={"project_root": str(project)}).json()["session_id"]
-    deny = dict(hook_event_name="PreToolUse", tool_name="Read", cwd=str(project), tool_input={"file_path": str(project / "big.py")})
+    deny = dict(hook_event_name="PreToolUse", tool_name="Read", cwd=str(project), tool_input={"file_path": str(project / "big.py")},
+                strict_read=True)  # strict mode is opt-in since Slice 34; the default allows the Read with the frame alongside
     first = _hook(client, **deny)  # the one uncached assembly
     assert first["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "def _build_mcp(" in first["hookSpecificOutput"]["additionalContext"]

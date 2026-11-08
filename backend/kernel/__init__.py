@@ -206,6 +206,8 @@ class _Session:
     # Not persisted: node -> sha256 of on-disk bytes `sync` already refused, so
     # the same bad bytes are judged (and counted) once, not on every hook call.
     sync_refused: dict = field(default_factory=dict)
+    # Not persisted: node -> the verdict string of that refusal (`refusals`).
+    sync_reasons: dict = field(default_factory=dict)
     # Not persisted: st_mtime_ns of the session file when this process last read
     # or wrote it (`refresh_sessions` reloads a session another process rewrote).
     disk_mtime_ns: int = 0
@@ -582,9 +584,10 @@ class StateKernel:
 
     def locate(self, session_id: str, path: str | Path) -> dict | None:
         """The tracked node a file path belongs to, without the sources the graph
-        view carries: `{node_id, path, status, locked, source_tokens}`, or None
-        when the path is outside the project or untracked. The cheap query the
-        lifecycle hooks make on every Read / Edit."""
+        view carries: `{node_id, path, status, locked, source_tokens, invariants,
+        invariants_auto_mined}`, or None when the path is outside the project or
+        untracked. The cheap query the lifecycle hooks make on every Read / Edit;
+        the invariant lists are what a permissive Read puts in front of the agent."""
         s = self._session(session_id)
         try:
             rel = Path(path).resolve().relative_to(s.root)
@@ -594,7 +597,8 @@ class StateKernel:
         for nid, n in s.nodes.items():
             if n.info.path.replace("\\", "/") == wanted:
                 return {"node_id": nid, "path": n.info.path, "status": n.status, "locked": n.locked,
-                        "source_tokens": _tokens.count(n.info.source)}
+                        "source_tokens": _tokens.count(n.info.source),
+                        "invariants": list(n.info.invariants), "invariants_auto_mined": list(n.info.mined_invariants)}
         return None
 
     def node_source(self, session_id: str, node_id: str) -> str:
@@ -607,10 +611,10 @@ class StateKernel:
         formatter): every file (or just `node_id`'s) whose bytes differ from what
         the session last saw is committed through Gates A -> B -> C exactly as it
         stands on disk, attested and propagated like any commit. Returns
-        `{"synced": [node ids], "rejected": {node id: "<gate>: <reason>"}}`; a
-        rejected node keeps its canonical source, turns REJECTED and its bytes
-        are left alone (judged once per distinct content). Unreadable, deleted
-        or undecodable files are skipped."""
+        `{"synced": [node ids], "rejected": {node id: "<gate>: [<subtype>: ]<reason>"}}`;
+        a rejected node keeps its canonical source, turns REJECTED and its bytes
+        are left alone (judged once per distinct content; `refusals` remembers the
+        verdict). Unreadable, deleted or undecodable files are skipped."""
         s = self._session(session_id)
         synced: list[str] = []
         rejected: dict[str, str] = {}
@@ -638,9 +642,18 @@ class StateKernel:
                 synced.append(nid)
                 s.sync_refused.pop(nid, None)
             else:
-                rejected[nid] = f"{verdict.gate}: {verdict.error}"
+                subtype = getattr(verdict.error, "subtype", None)
+                rejected[nid] = f"{verdict.gate}: {subtype + ': ' if subtype else ''}{verdict.error}"
                 s.sync_refused[nid] = digest
+                s.sync_reasons[nid] = rejected[nid]
         return {"synced": synced, "rejected": rejected}
+
+    def refusals(self, session_id: str) -> dict[str, str]:
+        """node id -> the `sync` verdict that refused the bytes still on disk, for
+        every node a sync left REJECTED in this process (what the Stop hook names
+        when its own sync has nothing new to judge)."""
+        s = self._session(session_id)
+        return {nid: reason for nid, reason in s.sync_reasons.items() if nid in s.sync_refused}
 
     def omission_report(self, session_id: str) -> dict:
         """`{"dirty": [node ids in DIRTY_OMISSION_RISK], "rejected": [node ids left

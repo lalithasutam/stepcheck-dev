@@ -36,6 +36,7 @@ def test_zero_touch_auto_initializes_session_on_first_hook_without_manual_init(c
         cwd=str(project),
         tool_input={"file_path": str(project / "big.py")},
         threshold=100,
+        strict_read=True,  # strict mode is opt-in since Slice 34; the auto-init is what this test is about
     )
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"

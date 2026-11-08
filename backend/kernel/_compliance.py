@@ -1,7 +1,14 @@
-"""Dual-use compliance exporter. Private to StateKernel (reached through
+"""Compliance exporter. Private to StateKernel (reached through
 `StateKernel.compliance_bundle`).
 
-Two documents from one session:
+Three documents from one session:
+  Statement  a standard in-toto Statement v1 (`_type` https://in-toto.io/Statement/v1,
+        `predicateType` https://stepcheck.dev/attestation/v1): `subject[]` is every
+        tracked file with its sha256, the predicate is what the session verified —
+        gate verdicts, invariant counts, the Merkle root, every module's status and
+        latest attestation, the per-node DSSE envelopes, the control mappings.
+        Written as attestation.intoto.json; what cosign / Witness / a policy engine
+        consume.
   DUC   (public Dual-Use Card)       hashes and counts only — repo digest over
         the sorted per-file digests, language counts, gate verdicts, invariant
         counts, a Merkle root over the attestation digests, and a leak check the
@@ -23,6 +30,9 @@ from . import _okf
 
 DUC_TYPE = "https://stepcheck.dev/duc/v1"
 DUAE_TYPE = "https://stepcheck.dev/dua-e/v1"
+STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
+PREDICATE_TYPE = "https://stepcheck.dev/attestation/v1"
+BUILDER_ID = "https://github.com/lalithasutam/stepcheck-dev#StateKernel"
 
 CONTROLS: dict[str, dict] = {
     "OWASP_AISVS_1.0:C9.3": {
@@ -179,7 +189,43 @@ def bundle(kernel, session_id: str) -> dict:
         "controls": {cid: {**c, "evidence_present": _evidence_present(c["evidence"], duc, events, envelopes)} for cid, c in CONTROLS.items()},
         "events": {"total": len(events), "kinds": dict(sorted(_count_kinds(events).items()))},
     }
-    return {"DUC": duc, "DUA-E": dua_e}
+    return {"Statement": statement(session_id, duc, dua_e, nodes), "DUC": duc, "DUA-E": dua_e}
+
+
+def statement(session_id: str, duc: dict, dua_e: dict, nodes: list[dict]) -> dict:
+    """The standard in-toto Statement v1 over the whole session: one subject per
+    tracked file (sorted by path, sha256 of its source as attested), and a
+    predicate that carries the verified facts the two dual-use files split."""
+    latest_by_path = {n["path"].replace("\\", "/"): (n.get("attestation") or {}).get("payload") for n in nodes}
+    counts = {n["path"].replace("\\", "/"): int(n.get("verified") or 0) for n in nodes}
+    files = sorted(dua_e["files"], key=lambda f: f["path"])
+    modules = []
+    for f in files:
+        latest = latest_by_path.get(f["path"])
+        modules.append({"path": f["path"], "sha256": f["sha256"], "language": f["language"], "status": f["status"],
+                        "locked": f["locked"],
+                        "attestation": {"sha256": latest["sha256"], "turn": latest["turn"], "count": counts.get(f["path"], 0)}
+                        if latest else None})
+    return {
+        "_type": STATEMENT_TYPE,
+        "subject": [{"name": f["path"], "digest": {"sha256": f["sha256"]}} for f in files],
+        "predicateType": PREDICATE_TYPE,
+        "predicate": {
+            "builder": {"id": BUILDER_ID},
+            "session_id": session_id,
+            "repo_digest": duc["repo_digest"],
+            "files": duc["files"],
+            "languages": duc["languages"],
+            "gates": duc["gates"],
+            "invariants": duc["invariants"],
+            "attestations": {**duc["attestations"], "merkle_scheme": duc["merkle_scheme"]},
+            "modules": modules,
+            "dsse_envelopes": dua_e["envelopes"],
+            "controls": sorted(CONTROLS),
+            "public_card_digest": dua_e["duc_digest"],
+            "events": dua_e["events"],
+        },
+    }
 
 
 def _count_kinds(events: list[dict]) -> dict[str, int]:

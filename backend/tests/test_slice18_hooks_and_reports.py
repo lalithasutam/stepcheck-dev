@@ -61,11 +61,13 @@ def _p95(xs):
 
 
 def test_hook_read_of_a_big_tracked_module_returns_its_skeleton(client, project):
+    # Strict mode (opt-in since Slice 34: `strict_read` / STEPCHECK_STRICT_READ=1); the
+    # default allows the Read and rides the frame along (test_slice34).
     (project / "big.py").write_text(BIG_SRC, encoding="utf-8", newline="\n")
     sid = _init(client, project)
     read = lambda name: _hook(  # noqa: E731
         client, hook_event_name="PreToolUse", tool_name="Read", cwd=str(project),
-        tool_input={"file_path": str(project / name)},
+        tool_input={"file_path": str(project / name)}, strict_read=True,
     )
 
     out = read("big.py")
@@ -79,7 +81,7 @@ def test_hook_read_of_a_big_tracked_module_returns_its_skeleton(client, project)
     assert read("README.md") == {}  # not a tracked module
     # The threshold is per request: a strict one turns billing.py into a skeleton too.
     strict = _hook(client, hook_event_name="PreToolUse", tool_name="Read", cwd=str(project),
-                   tool_input={"file_path": str(project / "billing.py")}, threshold=10)
+                   tool_input={"file_path": str(project / "billing.py")}, threshold=10, strict_read=True)
     assert strict["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "def charge(" in strict["hookSpecificOutput"]["additionalContext"]
 
@@ -136,7 +138,8 @@ def test_hook_endpoint_p95_under_25ms(client, project):
         dict(hook_event_name="PreToolUse", tool_name="Edit", cwd=str(project), tool_input={"file_path": str(project / "auth.py")}),
         dict(hook_event_name="PreToolUse", tool_name="Read", cwd=str(project), tool_input={"file_path": str(project / "billing.py")}),
     ]
-    deny = dict(hook_event_name="PreToolUse", tool_name="Read", cwd=str(project), tool_input={"file_path": str(project / "big.py")})
+    deny = dict(hook_event_name="PreToolUse", tool_name="Read", cwd=str(project), tool_input={"file_path": str(project / "big.py")},
+                strict_read=True)
     _hook(client, **deny)  # warm-up
 
     def timed(event) -> float:

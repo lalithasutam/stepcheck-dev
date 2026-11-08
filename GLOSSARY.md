@@ -58,6 +58,35 @@ lists `rejected` next to `dirty`; `can_finalize` needs both empty, `finalize_ses
 node's on-disk OKF frame while the frame is VERIFIED and attests the file's current bytes — a
 stale session cannot make `stepcheck ci` fail on a correct tree.
 
+**Permissive Read** — A PreToolUse Read of a tracked module over the token threshold is
+*allowed*: the module is synced into the session, a `focus=[]` checkout is charged like any
+frame, and the answer rides that frame — exports, preserved symbols, dependency interfaces — plus
+every Gate C invariant the module carries (mined guards first, then the executed `call:` and
+declared ones) as `additionalContext`, so the agent sees the contract on the turn it first reads
+the file and is never blocked from reading. Scoped slices (`limit <= 120`) and modules under the
+threshold pass silently. **Strict read** is opt-in (`STEPCHECK_STRICT_READ=1`, or `strict_read:
+true` on the event): the old behaviour, the Read denied and the skeleton supplied instead.
+
+**Catch receipt** — Every block at Gate A / B / C that a hook makes — a denied Edit / Write /
+MultiEdit, a Bash write the PostToolUse sync refused, a blocked Stop (DIRTY_OMISSION_RISK or
+REJECTED) — is phrased as the banner `[STEPCHECK CATCH — Gate X] <module> (<symbol>): <what would
+have broken>` (the symbol is the definition the edit changed, read from the two ASTs, else the one
+the verdict names) and appended as one JSON line to `<project>/.stepcheck/catches.jsonl`:
+`timestamp, module, symbol, gate, code, reason, hook, tool, session_id`. `code` is the Gate B
+subtype (`INTRA_NODE_SYMBOL_DROPPED`, `INTRA_NODE_BODY_STUBBED`, `INTER_NODE_DIRTY`, …) or the kind
+of Gate A / C failure (`LOCKED`, `SYNTAX`, `EXPORT_REQUIRED`, `GUARD_INVARIANT`, `CALL_INVARIANT`,
+`FRAME_INVARIANT`, `EXECUTION_BUDGET`). A human reads the receipt without the kernel; a sync's
+verdict is remembered per process (`StateKernel.refusals`) so the Stop names the same code.
+
+**Compliance Statement** — `stepcheck compliance` leads with `attestation.intoto.json`: a standard
+in-toto Statement v1 (`_type` `https://in-toto.io/Statement/v1`, `predicateType`
+`https://stepcheck.dev/attestation/v1`) whose `subject[]` is every tracked file with its sha256 and
+whose predicate carries what the session verified — gate verdicts, invariant counts, the Merkle
+root over attestation digests, each module's status and latest attestation, the per-node DSSE
+envelopes, the control mappings. The dual-use pair stays beside it: `DUC.json` (public card,
+hashes and counts only, self-checked for leakage) and `DUA-E.json` (escrowed envelopes, Merkle
+tree, controls). Deterministic: the same session yields byte-identical files.
+
 **Causal cone** — What a focused checkout carries besides the focus: same-file callees
 (`name(...)`, `self.m(...)`, `Class.m(...)`) followed transitively, bare decorators, a method's
 `__init__` / `__post_init__` and class attributes, and the module constants the cone reads.
