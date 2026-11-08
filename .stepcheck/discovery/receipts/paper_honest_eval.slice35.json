@@ -1,0 +1,3292 @@
+{
+ "generated_at": "2026-11-08T17:21:04.135151+00:00",
+ "generator": ".stepcheck/discovery/paper_honest_evaluation.py",
+ "kernel_commit": "36c6280",
+ "backend_dirty": true,
+ "python": "3.11.9",
+ "platform": "Windows-10-10.0.26200-SP0",
+ "skylos": {
+  "version": null,
+  "flags": [
+   "-a",
+   "--ai-defects",
+   "--json",
+   "--no-upload",
+   "--no-grep-verify"
+  ],
+  "catch_rule": "any new finding in the mutated file vs the before-scan"
+ },
+ "stepcheck": {
+  "catch_rule": "strict dry-run commit rejected at Gate B or C"
+ },
+ "caps": {
+  "A": 25,
+  "B": 25,
+  "C": 25,
+  "D": 20
+ },
+ "summary": {
+  "A": {
+   "cases": 13,
+   "stepcheck_caught": 0,
+   "stepcheck_pct": 0.0,
+   "skylos_caught": 0,
+   "skylos_pct": 0.0,
+   "stepcheck_kinds": {},
+   "skylos_rules": {},
+   "baseline_skipped": 0,
+   "missed_examples": [
+    "cookies.py::RequestsCookieJar._find_no_duplicates \u2014 comparison `cookie.name == name` flipped",
+    "app.py::Flask.url_for \u2014 comparison `endpoint[:1] == \".\"` flipped",
+    "models.py::RequestEncodingMixin._encode_files \u2014 comparison `len(v) == 2` flipped",
+    "app.py::Flask.make_response \u2014 comparison `len_rv == 3` flipped",
+    "models.py::Response.content \u2014 comparison `self.status_code == 0` flipped",
+    "cli.py::ScriptInfo.load_app \u2014 `re.split(r\":(?![\\\\/])\", self.app_import_path, maxs`: `+` -> `-`",
+    "models.py::Response.raise_for_status \u2014 constant 400 -> 700",
+    "ctx.py::AppContext.pop \u2014 comparison `len(self._cv_tokens) == 1` flipped"
+   ],
+   "targets_with_call_probe": 0
+  },
+  "B": {
+   "cases": 25,
+   "stepcheck_caught": 1,
+   "stepcheck_pct": 4.0,
+   "skylos_caught": 0,
+   "skylos_pct": 0.0,
+   "stepcheck_kinds": {
+    "Gate B INTRA_NODE_SYMBOL_DROPPED": 1
+   },
+   "skylos_rules": {},
+   "baseline_skipped": 0,
+   "missed_examples": [
+    "adapters.py::HTTPAdapter.__init__ \u2014 dropped state mutation `self.config = {}`",
+    "app.py::Flask.__init__ \u2014 dropped state mutation `self.cli = cli.AppGroup()`",
+    "adapters.py::HTTPAdapter.__setstate__ \u2014 dropped state mutation `self.proxy_manager = {}`",
+    "app.py::Flask.create_jinja_environment \u2014 dropped call `rv.globals.update(\n            url_for=self.url_for,\n       `",
+    "adapters.py::HTTPAdapter.init_poolmanager \u2014 dropped state mutation `self._pool_connections = connections`",
+    "app.py::Flask.update_template_context \u2014 dropped call `context.update(orig_ctx)`",
+    "auth.py::HTTPDigestAuth.__init__ \u2014 dropped state mutation `self.username = username`",
+    "auth.py::HTTPDigestAuth.build_digest_header \u2014 dropped state mutation `self._thread_local.last_nonce = nonce`"
+   ],
+   "targets_with_call_probe": 0
+  },
+  "C": {
+   "cases": 16,
+   "stepcheck_caught": 0,
+   "stepcheck_pct": 0.0,
+   "skylos_caught": 0,
+   "skylos_pct": 0.0,
+   "stepcheck_kinds": {},
+   "skylos_rules": {},
+   "baseline_skipped": 0,
+   "missed_examples": [
+    "adapters.py::HTTPAdapter.send \u2014 isinstance(x, T) -> isinstance(x, (T,)): `isinstance(e.reason, ResponseError)` -> `isinstance(e.reason, (ResponseError,))`",
+    "app.py::Flask.handle_user_exception \u2014 is None -> None is: `handler is None` -> `None is handler`",
+    "cookies.py::RequestsCookieJar._find_no_duplicates \u2014 is not None -> None is not: `toReturn is not None` -> `None is not toReturn`",
+    "app.py::Flask.url_for \u2014 is None -> None is: `url_adapter is None` -> `None is url_adapter`",
+    "cookies.py::merge_cookies \u2014 isinstance(x, T) -> isinstance(x, (T,)): `not isinstance(cookiejar, cookielib.CookieJar)` -> `not isinstance(cookiejar, (cookielib.CookieJar,))`",
+    "app.py::Flask.make_response \u2014 is None -> None is: `rv is None` -> `None is rv`",
+    "models.py::RequestEncodingMixin._encode_files \u2014 isinstance(x, T) -> isinstance(x, (T,)): `isinstance(data, basestring)` -> `isinstance(data, (basestring,))`",
+    "cli.py::find_best_app \u2014 mirrored comparison (<): `len(matches) > 1` -> `1 < len(matches)`"
+   ],
+   "targets_with_call_probe": 0
+  },
+  "D": {
+   "cases": 20,
+   "stepcheck_caught": 18,
+   "stepcheck_pct": 90.0,
+   "skylos_caught": 0,
+   "skylos_pct": 0.0,
+   "stepcheck_kinds": {
+    "Gate B INTRA_NODE_BODY_STUBBED": 1,
+    "Gate C guard:": 17
+   },
+   "skylos_rules": {},
+   "baseline_skipped": 0,
+   "missed_examples": [
+    "alphametics/alphametics.go::problem.isPuzzleSolution \u2014 guard `r == 0 || sum != p.letterValues[r-1]`: `==` -> `!=`",
+    "alphametics/alphametics.go::permutations \u2014 guard `i < 0`: `<` -> `<=`"
+   ],
+   "targets_with_call_probe": 0
+  },
+  "D_javascript": {
+   "cases": 5,
+   "stepcheck_caught": 5,
+   "skylos_caught": 0
+  },
+  "D_go": {
+   "cases": 5,
+   "stepcheck_caught": 3,
+   "skylos_caught": 0
+  },
+  "D_rust": {
+   "cases": 5,
+   "stepcheck_caught": 5,
+   "skylos_caught": 0
+  },
+  "D_java": {
+   "cases": 5,
+   "stepcheck_caught": 5,
+   "skylos_caught": 0
+  }
+ },
+ "paper_metrics": {
+  "faults": {
+   "stepcheck_tp": 258,
+   "stepcheck_fn": 39,
+   "skylos_tp": 118,
+   "skylos_fn": 121
+  },
+  "legit": {
+   "n": 63,
+   "stepcheck_fp": 1,
+   "skylos_fp": 0
+  },
+  "metrics": {
+   "stepcheck": {
+    "recall": 0.8686868686868687,
+    "precision": 0.9961389961389961,
+    "false_positive_rate": 0.015873015873015872,
+    "fault_cases": 297,
+    "legit_cases": 63
+   },
+   "skylos": {
+    "recall_on_fault_cases_it_was_run_on": 0.49372384937238495,
+    "fault_cases": 239,
+    "false_positive_rate_on_category_c": null
+   },
+   "composition": "faults = skylos_vs_stepcheck corpus (239: certification guard drops + stub wipes + audit mutation operators) + A + B + D; legitimate edits = certification gold patches judged strict (environment rejections excluded) + C"
+  }
+ },
+ "blind_spots": {
+  "stepcheck": [
+   "A: cookies.py::RequestsCookieJar._find_no_duplicates \u2014 comparison `cookie.name == name` flipped",
+   "A: app.py::Flask.url_for \u2014 comparison `endpoint[:1] == \".\"` flipped",
+   "A: models.py::RequestEncodingMixin._encode_files \u2014 comparison `len(v) == 2` flipped",
+   "A: app.py::Flask.make_response \u2014 comparison `len_rv == 3` flipped",
+   "A: models.py::Response.content \u2014 comparison `self.status_code == 0` flipped",
+   "A: cli.py::ScriptInfo.load_app \u2014 `re.split(r\":(?![\\\\/])\", self.app_import_path, maxs`: `+` -> `-`",
+   "A: models.py::Response.raise_for_status \u2014 constant 400 -> 700",
+   "A: ctx.py::AppContext.pop \u2014 comparison `len(self._cv_tokens) == 1` flipped",
+   "A: sessions.py::SessionRedirectMixin.resolve_redirects \u2014 comparison `parsed.fragment == \"\"` flipped",
+   "A: debughelpers.py::FormDataRoutingRedirect.__init__ \u2014 comparison `f\"{request.base_url}/\" == exc.new_url.partition(\"?` flipped",
+   "A: sessions.py::Session.send \u2014 `preferred_clock() - start`: `-` -> `+`",
+   "A: testing.py::EnvironBuilder.__init__ \u2014 `sep + url.query`: `+` -> `-`",
+   "A: views.py::MethodView.dispatch_request \u2014 comparison `request.method == \"HEAD\"` flipped",
+   "B: adapters.py::HTTPAdapter.__init__ \u2014 dropped state mutation `self.config = {}`",
+   "B: app.py::Flask.__init__ \u2014 dropped state mutation `self.cli = cli.AppGroup()`",
+   "B: adapters.py::HTTPAdapter.__setstate__ \u2014 dropped state mutation `self.proxy_manager = {}`",
+   "B: app.py::Flask.create_jinja_environment \u2014 dropped call `rv.globals.update(\n            url_for=self.url_for,\n       `",
+   "B: adapters.py::HTTPAdapter.init_poolmanager \u2014 dropped state mutation `self._pool_connections = connections`",
+   "B: app.py::Flask.update_template_context \u2014 dropped call `context.update(orig_ctx)`",
+   "B: auth.py::HTTPDigestAuth.__init__ \u2014 dropped state mutation `self.username = username`",
+   "B: auth.py::HTTPDigestAuth.build_digest_header \u2014 dropped state mutation `self._thread_local.last_nonce = nonce`",
+   "B: cli.py::get_version \u2014 dropped call `click.echo(\n        f\"Python {platform.python_version()}\\n\"\n`",
+   "B: auth.py::HTTPDigestAuth.handle_401 \u2014 dropped state mutation `self._thread_local.num_401_calls = 1`",
+   "B: cli.py::ScriptInfo.__init__ \u2014 dropped state mutation `self.app_import_path = app_import_path`",
+   "B: cookies.py::MockRequest.__init__ \u2014 dropped state mutation `self._r = request`",
+   "B: cli.py::ScriptInfo.load_app \u2014 dropped state mutation `self._loaded_app = app`",
+   "B: cookies.py::extract_cookies_to_jar \u2014 dropped call `jar.extract_cookies(res, req)`",
+   "B: config.py::Config.from_pyfile \u2014 dropped state mutation `d.__file__ = filename`",
+   "B: cookies.py::get_cookie_header \u2014 dropped call `jar.add_cookie_header(r)`",
+   "B: config.py::Config.from_mapping \u2014 dropped call `mappings.update(kwargs)`",
+   "B: exceptions.py::RequestException.__init__ \u2014 dropped state mutation `self.response = response`",
+   "B: ctx.py::after_this_request \u2014 dropped call `ctx._after_request_functions.append(f)`",
+   "B: models.py::RequestEncodingMixin.path_url \u2014 dropped call `url.append(path)`",
+   "B: ctx.py::AppContext.__init__ \u2014 dropped state mutation `self.app = app`",
+   "B: models.py::Request.__init__ \u2014 dropped state mutation `self.hooks = default_hooks()`",
+   "B: ctx.py::AppContext.pop \u2014 dropped call `appcontext_popped.send(self.app, _async_wrapper=self.app.ens`",
+   "B: models.py::Request.prepare \u2014 dropped call `p.prepare(\n            method=self.method,\n            url=s`",
+   "D: alphametics/alphametics.go::problem.isPuzzleSolution \u2014 guard `r == 0 || sum != p.letterValues[r-1]`: `==` -> `!=`",
+   "D: alphametics/alphametics.go::permutations \u2014 guard `i < 0`: `<` -> `<=`"
+  ],
+  "stepcheck_false_positives": []
+ },
+ "cases": [
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "RequestsCookieJar._find_no_duplicates",
+   "description": "comparison `cookie.name == name` flipped",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 204.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.url_for",
+   "description": "comparison `endpoint[:1] == \".\"` flipped",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 342.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "RequestEncodingMixin._encode_files",
+   "description": "comparison `len(v) == 2` flipped",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 331.0,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.make_response",
+   "description": "comparison `len_rv == 3` flipped",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 368.5,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "Response.content",
+   "description": "comparison `self.status_code == 0` flipped",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 301.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "ScriptInfo.load_app",
+   "description": "`re.split(r\":(?![\\\\/])\", self.app_import_path, maxs`: `+` -> `-`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 290.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "Response.raise_for_status",
+   "description": "constant 400 -> 700",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 304.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "AppContext.pop",
+   "description": "comparison `len(self._cv_tokens) == 1` flipped",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 111.5,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/sessions.py",
+   "module": "sessions.py",
+   "function": "SessionRedirectMixin.resolve_redirects",
+   "description": "comparison `parsed.fragment == \"\"` flipped",
+   "node_id": "sessions",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 196.4,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/debughelpers.py",
+   "module": "debughelpers.py",
+   "function": "FormDataRoutingRedirect.__init__",
+   "description": "comparison `f\"{request.base_url}/\" == exc.new_url.partition(\"?` flipped",
+   "node_id": "debughelpers",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 118.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/sessions.py",
+   "module": "sessions.py",
+   "function": "Session.send",
+   "description": "`preferred_clock() - start`: `-` -> `+`",
+   "node_id": "sessions",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 280.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/testing.py",
+   "module": "testing.py",
+   "function": "EnvironBuilder.__init__",
+   "description": "`sep + url.query`: `+` -> `-`",
+   "node_id": "testing",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 86.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "A",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/views.py",
+   "module": "views.py",
+   "function": "MethodView.dispatch_request",
+   "description": "comparison `request.method == \"HEAD\"` flipped",
+   "node_id": "views",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 27.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/adapters.py",
+   "module": "adapters.py",
+   "function": "HTTPAdapter.__init__",
+   "description": "dropped state mutation `self.config = {}`",
+   "node_id": "adapters",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 178.4,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.__init__",
+   "description": "dropped state mutation `self.cli = cli.AppGroup()`",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 278.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/adapters.py",
+   "module": "adapters.py",
+   "function": "HTTPAdapter.__setstate__",
+   "description": "dropped state mutation `self.proxy_manager = {}`",
+   "node_id": "adapters",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 181.8,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.create_jinja_environment",
+   "description": "dropped call `rv.globals.update(\n            url_for=self.url_for,\n       `",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 402.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/adapters.py",
+   "module": "adapters.py",
+   "function": "HTTPAdapter.init_poolmanager",
+   "description": "dropped state mutation `self._pool_connections = connections`",
+   "node_id": "adapters",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 157.8,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.update_template_context",
+   "description": "dropped call `context.update(orig_ctx)`",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 289.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/auth.py",
+   "module": "auth.py",
+   "function": "HTTPDigestAuth.__init__",
+   "description": "dropped state mutation `self.username = username`",
+   "node_id": "auth",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 184.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/blueprints.py",
+   "module": "blueprints.py",
+   "function": "Blueprint.__init__",
+   "description": "dropped state mutation `self.cli = AppGroup()`",
+   "node_id": "blueprints",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "B",
+    "subtype": "INTRA_NODE_SYMBOL_DROPPED",
+    "invariant_kind": null,
+    "error": "preserved symbol 'call:AppGroup' of 'blueprints' was silently dropped from the staged source",
+    "environment": false,
+    "ms": 25.8,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/auth.py",
+   "module": "auth.py",
+   "function": "HTTPDigestAuth.build_digest_header",
+   "description": "dropped state mutation `self._thread_local.last_nonce = nonce`",
+   "node_id": "auth",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 166.8,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "get_version",
+   "description": "dropped call `click.echo(\n        f\"Python {platform.python_version()}\\n\"\n`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 395.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/auth.py",
+   "module": "auth.py",
+   "function": "HTTPDigestAuth.handle_401",
+   "description": "dropped state mutation `self._thread_local.num_401_calls = 1`",
+   "node_id": "auth",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 3,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 130.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "ScriptInfo.__init__",
+   "description": "dropped state mutation `self.app_import_path = app_import_path`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 372.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "MockRequest.__init__",
+   "description": "dropped state mutation `self._r = request`",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 178.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "ScriptInfo.load_app",
+   "description": "dropped state mutation `self._loaded_app = app`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 335.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "extract_cookies_to_jar",
+   "description": "dropped call `jar.extract_cookies(res, req)`",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 254.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/config.py",
+   "module": "config.py",
+   "function": "Config.from_pyfile",
+   "description": "dropped state mutation `d.__file__ = filename`",
+   "node_id": "config",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 61.7,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "get_cookie_header",
+   "description": "dropped call `jar.add_cookie_header(r)`",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 195.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/config.py",
+   "module": "config.py",
+   "function": "Config.from_mapping",
+   "description": "dropped call `mappings.update(kwargs)`",
+   "node_id": "config",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 62.0,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/exceptions.py",
+   "module": "exceptions.py",
+   "function": "RequestException.__init__",
+   "description": "dropped state mutation `self.response = response`",
+   "node_id": "exceptions",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 54.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "after_this_request",
+   "description": "dropped call `ctx._after_request_functions.append(f)`",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 100.5,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "RequestEncodingMixin.path_url",
+   "description": "dropped call `url.append(path)`",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 260.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "AppContext.__init__",
+   "description": "dropped state mutation `self.app = app`",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 96.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "Request.__init__",
+   "description": "dropped state mutation `self.hooks = default_hooks()`",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 257.5,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "B",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "AppContext.pop",
+   "description": "dropped call `appcontext_popped.send(self.app, _async_wrapper=self.app.ens`",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 111.0,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "B",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "Request.prepare",
+   "description": "dropped call `p.prepare(\n            method=self.method,\n            url=s`",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 0,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 266.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/adapters.py",
+   "module": "adapters.py",
+   "function": "HTTPAdapter.send",
+   "description": "isinstance(x, T) -> isinstance(x, (T,)): `isinstance(e.reason, ResponseError)` -> `isinstance(e.reason, (ResponseError,))`",
+   "node_id": "adapters",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 22,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 148.8,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.handle_user_exception",
+   "description": "is None -> None is: `handler is None` -> `None is handler`",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 302.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "RequestsCookieJar._find_no_duplicates",
+   "description": "is not None -> None is not: `toReturn is not None` -> `None is not toReturn`",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 195.7,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.url_for",
+   "description": "is None -> None is: `url_adapter is None` -> `None is url_adapter`",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 340.5,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/cookies.py",
+   "module": "cookies.py",
+   "function": "merge_cookies",
+   "description": "isinstance(x, T) -> isinstance(x, (T,)): `not isinstance(cookiejar, cookielib.CookieJar)` -> `not isinstance(cookiejar, (cookielib.CookieJar,))`",
+   "node_id": "cookies",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 203.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/app.py",
+   "module": "app.py",
+   "function": "Flask.make_response",
+   "description": "is None -> None is: `rv is None` -> `None is rv`",
+   "node_id": "app",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 281.4,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/models.py",
+   "module": "models.py",
+   "function": "RequestEncodingMixin._encode_files",
+   "description": "isinstance(x, T) -> isinstance(x, (T,)): `isinstance(data, basestring)` -> `isinstance(data, (basestring,))`",
+   "node_id": "models",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 285.0,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "find_best_app",
+   "description": "mirrored comparison (<): `len(matches) > 1` -> `1 < len(matches)`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 5,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 323.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "psf/requests@v2.32.3",
+   "rel": "requests/sessions.py",
+   "module": "sessions.py",
+   "function": "Session.send",
+   "description": "isinstance(x, T) -> isinstance(x, (T,)): `isinstance(request, Request)` -> `isinstance(request, (Request,))`",
+   "node_id": "sessions",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 232.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-ds43u0hx"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "find_app_by_string",
+   "description": "isinstance(x, T) -> isinstance(x, (T,)): `not isinstance(expr.func, ast.Name)` -> `not isinstance(expr.func, (ast.Name,))`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 9,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 306.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/cli.py",
+   "module": "cli.py",
+   "function": "ScriptInfo.load_app",
+   "description": "is None -> None is: `app is None` -> `None is app`",
+   "node_id": "cli",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 327.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "after_this_request",
+   "description": "is None -> None is: `ctx is None` -> `None is ctx`",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 121.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/ctx.py",
+   "module": "ctx.py",
+   "function": "copy_current_request_context",
+   "description": "is None -> None is: `ctx is None` -> `None is ctx`",
+   "node_id": "ctx",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 122.3,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/helpers.py",
+   "module": "helpers.py",
+   "function": "stream_with_context",
+   "description": "is None -> None is: `ctx is None` -> `None is ctx`",
+   "node_id": "helpers",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 139.1,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/helpers.py",
+   "module": "helpers.py",
+   "function": "get_root_path",
+   "description": "is None -> None is: `spec is None` -> `None is spec`",
+   "node_id": "helpers",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 152.6,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "C",
+   "label": "pallets/flask@3.0.3",
+   "rel": "flask/testing.py",
+   "module": "testing.py",
+   "function": "FlaskClient.session_transaction",
+   "description": "is None -> None is: `self._cookies is None` -> `None is self._cookies`",
+   "node_id": "testing",
+   "lang": "python",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 3,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 96.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-m12s81b6"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/javascript",
+   "rel": "affine-cipher/affine_cipher.js",
+   "module": "affine-cipher/affine_cipher.js",
+   "function": "checkCoprime",
+   "description": "guard `!areCoprimes(a, b)` deleted",
+   "node_id": "affine_cipher",
+   "lang": "javascript",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "B",
+    "subtype": "INTRA_NODE_BODY_STUBBED",
+    "invariant_kind": null,
+    "error": "symbol 'checkCoprime' body was replaced with skeleton stub '{}' (preserve original implementation or use patch replace_symbol)",
+    "environment": false,
+    "ms": 29.1,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-tv2qbc8q"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/javascript",
+   "rel": "bowling/bowling.js",
+   "module": "bowling/bowling.js",
+   "function": "Bowling.roll",
+   "description": "guard `pins < 0`: `<` -> `<=`",
+   "node_id": "bowling",
+   "lang": "javascript",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 9,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Bowling.roll:pins<0 throws Error' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 69.3,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-tv2qbc8q"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/javascript",
+   "rel": "bowling/bowling.js",
+   "module": "bowling/bowling.js",
+   "function": "Bowling.roll",
+   "description": "guard `pins > this.remainingPins`: `>` -> `>=`",
+   "node_id": "bowling",
+   "lang": "javascript",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 9,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Bowling.roll:pins>this.remainingPins throws Error' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 85.7,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-tv2qbc8q"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/javascript",
+   "rel": "bowling/bowling.js",
+   "module": "bowling/bowling.js",
+   "function": "Bowling.roll",
+   "description": "guard `pins < 0` deleted",
+   "node_id": "bowling",
+   "lang": "javascript",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 9,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Bowling.roll:pins<0 throws Error' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 62.6,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-tv2qbc8q"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/javascript",
+   "rel": "bowling/bowling.js",
+   "module": "bowling/bowling.js",
+   "function": "Bowling.roll",
+   "description": "guard `pins > this.remainingPins` deleted",
+   "node_id": "bowling",
+   "lang": "javascript",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 9,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Bowling.roll:pins>this.remainingPins throws Error' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 61.3,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-tv2qbc8q"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/go",
+   "rel": "alphametics/alphametics.go",
+   "module": "alphametics/alphametics.go",
+   "function": "Solve",
+   "description": "guard `p == nil`: `==` -> `!=`",
+   "node_id": "alphametics",
+   "lang": "go",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Solve:p==nil returns' of 'alphametics' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 116.5,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-6ynqubpv"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/go",
+   "rel": "alphametics/alphametics.go",
+   "module": "alphametics/alphametics.go",
+   "function": "problem.isPuzzleSolution",
+   "description": "guard `r == 0 || sum != p.letterValues[r-1]`: `==` -> `!=`",
+   "node_id": "alphametics",
+   "lang": "go",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 108.2,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-6ynqubpv"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/go",
+   "rel": "alphametics/alphametics.go",
+   "module": "alphametics/alphametics.go",
+   "function": "permutations",
+   "description": "guard `r > n`: `>` -> `>=`",
+   "node_id": "alphametics",
+   "lang": "go",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:permutations:r>n returns' of 'alphametics' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 141.6,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-6ynqubpv"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/go",
+   "rel": "alphametics/alphametics.go",
+   "module": "alphametics/alphametics.go",
+   "function": "permutations",
+   "description": "guard `i < 0`: `<` -> `<=`",
+   "node_id": "alphametics",
+   "lang": "go",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": true,
+    "gate": null,
+    "subtype": null,
+    "invariant_kind": null,
+    "error": "",
+    "environment": false,
+    "ms": 86.9,
+    "caught": false
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-6ynqubpv"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/go",
+   "rel": "alphametics/alphametics.go",
+   "module": "alphametics/alphametics.go",
+   "function": "Solve",
+   "description": "guard `p == nil` deleted",
+   "node_id": "alphametics",
+   "lang": "go",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 2,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Solve:p==nil returns' of 'alphametics' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 133.4,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-6ynqubpv"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/rust",
+   "rel": "alphametics/alphametics.rs",
+   "module": "alphametics/alphametics.rs",
+   "function": "test_equation",
+   "description": "guard `cant_be_zero.iter().any(|d| substitutions[d] == 0)`: `==` -> `!=`",
+   "node_id": "alphametics",
+   "lang": "rust",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:test_equation:cant_be_zero.iter().any(|d|substitutions[d]==0) returns' of 'alphametics' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 45.9,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-q01r36k0"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/rust",
+   "rel": "alphametics/alphametics.rs",
+   "module": "alphametics/alphametics.rs",
+   "function": "test_equation",
+   "description": "guard `cant_be_zero.iter().any(|d| substitutions[d] == 0)` deleted",
+   "node_id": "alphametics",
+   "lang": "rust",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:test_equation:cant_be_zero.iter().any(|d|substitutions[d]==0) returns' of 'alphametics' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 64.0,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-q01r36k0"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/rust",
+   "rel": "bowling/bowling.rs",
+   "module": "bowling/bowling.rs",
+   "function": "Frame.bonus_valid",
+   "description": "guard `self.is_open() || !self.bonus_done()` deleted",
+   "node_id": "bowling",
+   "lang": "rust",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Frame.bonus_valid:self.is_open()||!self.bonus_done() returns' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 83.5,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-q01r36k0"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/rust",
+   "rel": "bowling/bowling.rs",
+   "module": "bowling/bowling.rs",
+   "function": "Frame.bonus_valid",
+   "description": "guard `self.is_spare()` deleted",
+   "node_id": "bowling",
+   "lang": "rust",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:Frame.bonus_valid:self.is_spare() returns' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 112.4,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-q01r36k0"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/rust",
+   "rel": "bowling/bowling.rs",
+   "module": "bowling/bowling.rs",
+   "function": "BowlingGame.roll",
+   "description": "guard `self.score().is_some()` deleted",
+   "node_id": "bowling",
+   "lang": "rust",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 4,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:BowlingGame.roll:self.score().is_some() returns Err' of 'bowling' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 80.1,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-q01r36k0"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/java",
+   "rel": "affine-cipher/AffineCipher.java",
+   "module": "affine-cipher/AffineCipher.java",
+   "function": "AffineCipher.translate",
+   "description": "guard `inv == 1`: `==` -> `!=`",
+   "node_id": "AffineCipher",
+   "lang": "java",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:AffineCipher.translate:inv==1 throws IllegalArgumentException' of 'AffineCipher' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 42.5,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-xnobjkwo"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/java",
+   "rel": "affine-cipher/AffineCipher.java",
+   "module": "affine-cipher/AffineCipher.java",
+   "function": "AffineCipher.translate",
+   "description": "guard `inv == 1` deleted",
+   "node_id": "AffineCipher",
+   "lang": "java",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 1,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:AffineCipher.translate:inv==1 throws IllegalArgumentException' of 'AffineCipher' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 42.2,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-xnobjkwo"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/java",
+   "rel": "all-your-base/BaseConverter.java",
+   "module": "all-your-base/BaseConverter.java",
+   "function": "BaseConverter.convertToBase",
+   "description": "guard `newBase < MINIMUM_VALID_BASE`: `<` -> `<=`",
+   "node_id": "BaseConverter",
+   "lang": "java",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 5,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:BaseConverter.convertToBase:newBase<MINIMUM_VALID_BASE throws IllegalArgumentException' of 'BaseConverter' (auto-mined guard clause removed or weakened)",
+    "environment": false,
+    "ms": 48.0,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-xnobjkwo"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/java",
+   "rel": "all-your-base/BaseConverter.java",
+   "module": "all-your-base/BaseConverter.java",
+   "function": "BaseConverter.validateInputs",
+   "description": "guard `originalBase < MINIMUM_VALID_BASE`: `<` -> `<=`",
+   "node_id": "BaseConverter",
+   "lang": "java",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 5,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:BaseConverter.validateInputs:originalBase<MINIMUM_VALID_BASE throws IllegalArgumentException' of 'BaseConverter' (auto-mined guard clause removed or weakene",
+    "environment": false,
+    "ms": 48.9,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-xnobjkwo"
+  },
+  {
+   "category": "D",
+   "label": "Aider polyglot/java",
+   "rel": "all-your-base/BaseConverter.java",
+   "module": "all-your-base/BaseConverter.java",
+   "function": "BaseConverter.validateInputs",
+   "description": "guard `Arrays.stream(originalDigits).min().getAsInt() < 0`: `<` -> `<=`",
+   "node_id": "BaseConverter",
+   "lang": "java",
+   "call_probe_on_target": false,
+   "guards_mined_on_target": 5,
+   "stepcheck": {
+    "accepted": false,
+    "gate": "C",
+    "subtype": null,
+    "invariant_kind": "guard:",
+    "error": "staged diff violates frame invariant 'guard:BaseConverter.validateInputs:Arrays.stream(originalDigits).min().getAsInt()<0 throws IllegalArgumentException' of 'BaseConverter' (auto-mined guard clause r",
+    "environment": false,
+    "ms": 54.8,
+    "caught": true
+   },
+   "skylos": {
+    "caught": null,
+    "new_findings": [],
+    "skipped": true
+   },
+   "root": "C:\\Users\\lenovo\\AppData\\Local\\Temp\\sc-ext-xnobjkwo"
+  }
+ ],
+ "sources": [
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/__init__.py",
+   "sha256": "e3168011198f0c804fb1ad8fb23a54f6bd3aca8a0afb69992874d90215915adb",
+   "bytes": 5072
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/__version__.py",
+   "sha256": "1557e09606663509e660f5e93a8843539f05e4451bffe5674936807ac4b5f3b8",
+   "bytes": 435
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/_internal_utils.py",
+   "sha256": "9cc4329abe21b37d93a95a3901b0ab99c24486f3d487bc57965bb2ab0b252e24",
+   "bytes": 1495
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/adapters.py",
+   "sha256": "28871e72c72a6a6eab78e097465e03c0fe235fc25c97cb1de7b7edd7b291d9c4",
+   "bytes": 27451
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/api.py",
+   "sha256": "fd96fd39aeedcd5222cd32b016b3e30c463d7a3b66fce9d2444467003c46b10b",
+   "bytes": 6449
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/auth.py",
+   "sha256": "905ef9b6a9cb72d67d31ffe19bd4d9223e1c4169cde6ec51cfca16b31e70991d",
+   "bytes": 10186
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/certs.py",
+   "sha256": "67d49be35d009efea35054f2b2cd23145854eb1b2df1cb442ea7f2f04bf6de0c",
+   "bytes": 429
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/compat.py",
+   "sha256": "0b9c3f0cf2d2bab5cf81c75653bf1fa2b6b400f99b6245f61bcf50bc7e71ccf0",
+   "bytes": 1817
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/cookies.py",
+   "sha256": "6cd8be8aa123e0d3d9d34fa86feac7bf392f39bccdde5129830de0ea9692dd7c",
+   "bytes": 18590
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/exceptions.py",
+   "sha256": "8c93d2d545804ecf3a4a155468ba2b4e225bd52686ba83445a020225ea7e5646",
+   "bytes": 4260
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/help.py",
+   "sha256": "80f5f977f1fb5ddf3c6830017a386a1a097d075545453b79066898bcbdcfcc84",
+   "bytes": 3875
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/hooks.py",
+   "sha256": "0a2bb2b221c0dfd57951f702057148c7cdc8ac3a6ec1f37d45c4d482fdbc7ed4",
+   "bytes": 733
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/models.py",
+   "sha256": "938daba17cc2f2efce6a000f422f54e0c91f3bb8b8af615d6aabccaacb4f7a17",
+   "bytes": 35418
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/packages.py",
+   "sha256": "fe0d2067af355320252874631fa91a9db6a8c71d9e01beaacdc5e2383c932287",
+   "bytes": 904
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/sessions.py",
+   "sha256": "ca44c8f145864a5b4e7c7d3b1caa25947ee44c11b0e168620556901a67244f0e",
+   "bytes": 30495
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/status_codes.py",
+   "sha256": "889500780db96da4ddc3ee8f7c3d1e178aa1a48343251248fb268cab1b382c42",
+   "bytes": 4322
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/structures.py",
+   "sha256": "f886e6855cf4e92fb968f499b94b6167afba0fd5ce8d1b935c739a6d8d38d573",
+   "bytes": 2912
+  },
+  {
+   "url": "https://raw.githubusercontent.com/psf/requests/v2.32.3/src/requests/utils.py",
+   "sha256": "1e2402e8dabf0dade4b5a32217342487e7429378901c7284b184b990373ef02c",
+   "bytes": 33619
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/__init__.py",
+   "sha256": "eb132a7550341484365352956865f79733427573f3a073da6b486f40235c7d29",
+   "bytes": 2625
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/__main__.py",
+   "sha256": "6d8b7d7846a845059d7a3107143f11131f63c5511d669b44085b15ec5e3d2279",
+   "bytes": 30
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/app.py",
+   "sha256": "efe961e9c223dbbae24c4d50d7c3a4d69e67399f2a62232ec7806d73aa3a98d7",
+   "bytes": 60143
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/blueprints.py",
+   "sha256": "ec83573f04e45317ce41738ebf5caee763691cf98f188e5f31330567e046f726",
+   "bytes": 4430
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/cli.py",
+   "sha256": "38e69ffc47ea8a1d62da29f9f23fb96596664273e96927e25056c48e52fd6f3c",
+   "bytes": 35825
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/config.py",
+   "sha256": "6cbccb5408fe72af97a2dbbd7aba8e16d7b4c5215a557c9fcf40243f819bc266",
+   "bytes": 13312
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/ctx.py",
+   "sha256": "e1ab4384927f72957554cab8aac7d4e04ffad4cd6837dde3952d87f608eb979f",
+   "bytes": 15120
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/debughelpers.py",
+   "sha256": "3c6203852b56fde7d18e969adf31c8a68fa1b52b49391e35229dce2563d8070a",
+   "bytes": 6080
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/globals.py",
+   "sha256": "5dd419992b4198f22cf2df77b63c7aa4eec19b78286c068e3569057141da19ab",
+   "bytes": 1713
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/helpers.py",
+   "sha256": "b58adc43fef71ae49954483016bf9e32657af54ae21500c19adf30649200aaf8",
+   "bytes": 23084
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/logging.py",
+   "sha256": "f2c33758c4ee6e2d5c05bd9cfe53e45a937427c74c02aae029160b2e2d5d0952",
+   "bytes": 2377
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/sessions.py",
+   "sha256": "454e25ce6f4c416f42b47f2b54b4530e6f1448c2724f82dbbd87bbb31336fff9",
+   "bytes": 14807
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/signals.py",
+   "sha256": "57b94c530c3b0aa809d93854067d4f89ab59b506a73b2b7b399a6ed86648fb7e",
+   "bytes": 750
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/templating.py",
+   "sha256": "d937172d3f3902c7e59b65bd58e485c4a0a6627e5ee3dc3f26483df8d69a256a",
+   "bytes": 7537
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/testing.py",
+   "sha256": "dc11576f76cfed1e6bf972c1ba86e17336f10eef3ed4b591cd8ba16ebfa5c1a1",
+   "bytes": 10163
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/typing.py",
+   "sha256": "65abcafb0576f18bfc09007bbbbdea669fe32da9696d676b5d2dfb411d5fb4dd",
+   "bytes": 3190
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/views.py",
+   "sha256": "07ae9b4ef60105c1cc624e1d03549c643d284d14c1974239b26a759519bdae22",
+   "bytes": 6939
+  },
+  {
+   "url": "https://raw.githubusercontent.com/pallets/flask/3.0.3/src/flask/wrappers.py",
+   "sha256": "9b58f9b4827122ef3fb0f3e04c007f1b84d3879d90f87a03bb0fea1d5e49e7d8",
+   "bytes": 5831
+  },
+  {
+   "url": "https://api.github.com/repos/Aider-AI/polyglot-benchmark/git/trees/main?recursive=1",
+   "sha256": "53cae5f6d8634b5f30ef70091aed83ab6b4fdfd3686ebb649971821069ab4d9a",
+   "bytes": 967960
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/affine-cipher/.meta/proof.ci.js",
+   "sha256": "a9305cf340fab1e4146e27eb53b051f85d342187c7e6ccd3a5fbd1dba8d66256",
+   "bytes": 1995
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/alphametics/.meta/proof.ci.js",
+   "sha256": "562313b18505b6232a927cf38dac7a42670b48891ea80328b1c7a1e98d5bd908",
+   "bytes": 1667
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/beer-song/.meta/proof.ci.js",
+   "sha256": "89184cc7248165ba1c98b5267be742debaa423127955ca2855be2da9c70548e1",
+   "bytes": 1080
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/binary/.meta/proof.ci.js",
+   "sha256": "4985c7a952b697e01449fd2e1be2bc7a47bf7ed837f27bc8dc0bdcbc805e9af2",
+   "bytes": 321
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/book-store/.meta/proof.ci.js",
+   "sha256": "86fa356b22031075f7eb00355ea9c239702e7cb83a4939cef8a5fb4d3974db1c",
+   "bytes": 1549
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/bottle-song/.meta/proof.ci.js",
+   "sha256": "2ef44b5ef38bf7793156d717bfdbb11bf30c9eca7e124c4161b110e9f2b2fe1e",
+   "bytes": 983
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/bowling/.meta/proof.ci.js",
+   "sha256": "2c81736bb6e3023c45ed4ee78fdf14775a57a616d385ee2e2f897e93855c743f",
+   "bytes": 4167
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/complex-numbers/.meta/proof.ci.js",
+   "sha256": "18299a72fd0b63e2064eb7769300be44632461ae6b62e7a80112ef13542ba644",
+   "bytes": 1102
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/connect/.meta/proof.ci.js",
+   "sha256": "90805ed52b860cfc48532f58ab2d991db5f4a32fb387a51aa279dbe0f3add96f",
+   "bytes": 1765
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/food-chain/.meta/proof.ci.js",
+   "sha256": "f8f20c92a38b32f4568d3c72f4cd55a439328c0ed868922adddc88ff9a860229",
+   "bytes": 3117
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/forth/.meta/proof.ci.js",
+   "sha256": "61fdac019920d16c90a7501259c58d46c4ac49f2c11f3f701bc1f595509ad9d0",
+   "bytes": 2512
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/go-counting/.meta/proof.ci.js",
+   "sha256": "4666e4751f53f1f8a6bca7c79266deed24fa6ff449b04b375cb4e29ef1cd852c",
+   "bytes": 3732
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/grade-school/.meta/proof.ci.js",
+   "sha256": "681ac5ad5f7c4ed4281f434fc88cba1509fc63e768af982d2fd052cefb70b12c",
+   "bytes": 571
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/grep/.meta/proof.ci.js",
+   "sha256": "f24944268ea9d0de187709e742b186868da2d66c570799fa190e9dc49b7bfd84",
+   "bytes": 2569
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/house/.meta/proof.ci.js",
+   "sha256": "3d0241e221eb4393cb53b731d68fe93de929000dd67aa2d580bf0ac8985d0a0b",
+   "bytes": 1281
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/killer-sudoku-helper/.meta/proof.ci.js",
+   "sha256": "b85374cf43cbd8de69df4114ef0013aa7ec88c8a573d7c2dc509420e835e4d63",
+   "bytes": 720
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/ledger/.meta/proof.ci.js",
+   "sha256": "a9796ab14e6dfc772f92942e7e3e35ad64ca92bb2f84215532cff9f0ca1a17cd",
+   "bytes": 2549
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/list-ops/.meta/proof.ci.js",
+   "sha256": "93000404ddf17445f002a67a2b137808178c8b36621fa62cba0ed7101ad59074",
+   "bytes": 1983
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/meetup/.meta/proof.ci.js",
+   "sha256": "7cb6f0be0e68623b08dd5559aedab9ebf267032099b9d2b813273994b8cc93ed",
+   "bytes": 1257
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/ocr-numbers/.meta/proof.ci.js",
+   "sha256": "844c32d224142afb14f0e3021e80c203ac2d5d57fb90252b83c17eff0efc9304",
+   "bytes": 1432
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/palindrome-products/.meta/proof.ci.js",
+   "sha256": "e9f3ab57ebe9ea5d72db9632803b6288e26dcf84a3bc9c65f2f7e62782e11195",
+   "bytes": 1841
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/parallel-letter-frequency/.meta/proof.ci.js",
+   "sha256": "d69c58c2aacc955d8b32b47d8b0ececf5beb936ffa4d2e572805af20e0025e1d",
+   "bytes": 1125
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/phone-number/.meta/proof.ci.js",
+   "sha256": "b9ba077f1cc2481079a63b484df8a0df9944d5cf4fb3c49f99654a4eed4d9d00",
+   "bytes": 1150
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/pig-latin/.meta/proof.ci.js",
+   "sha256": "8f37562080d2b2e86365cbbe42b3a2cbc7a12d51e3633d2d49146b43d8d424ba",
+   "bytes": 424
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/poker/.meta/proof.ci.js",
+   "sha256": "f07c61e93deb98baba9ae5876f37ce687c78a1bb8a6344a5761cc8ece7c9864e",
+   "bytes": 6663
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/promises/.meta/proof.ci.js",
+   "sha256": "98847787a0f7a2c5169dd881675261a46dec3a18a16f29e3f8e653233a6f3c5d",
+   "bytes": 1311
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/queen-attack/.meta/proof.ci.js",
+   "sha256": "3ebf7a889322904601f39e3c37712fb6285197097b2296318d5bdbe702575d0f",
+   "bytes": 1615
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/rational-numbers/.meta/proof.ci.js",
+   "sha256": "152ee6d8201faf0fe1fb5ed706cba43f22209d09660e08d5d1d07066aa2e80ca",
+   "bytes": 1906
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/react/.meta/proof.ci.js",
+   "sha256": "9808a846665e5fa6931882a436abafa8ee0a349a67074a9db5bb316d5e06a9a4",
+   "bytes": 2072
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/rectangles/.meta/proof.ci.js",
+   "sha256": "d0744e6da84e1e70fc74c85c884e382b971dafa33e5a78c2600540ffec5ad7a3",
+   "bytes": 1464
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/resistor-color-trio/.meta/proof.ci.js",
+   "sha256": "4c6fba022d55ddf840d607d6a42b39a7608ed74d5cac0e302c5d1c5c952d480a",
+   "bytes": 1180
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/rest-api/.meta/proof.ci.js",
+   "sha256": "b6f1dc8d40be38584e6a6f1485bbc1cc91232f54c7a470d1e9bc69992d9589f7",
+   "bytes": 2856
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/robot-name/.meta/proof.ci.js",
+   "sha256": "38ccc19400800d6ba706dbb641f2c50766cb47147d8a4ccecc6db7a058dcfc5d",
+   "bytes": 1539
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/say/.meta/proof.ci.js",
+   "sha256": "c8cd635843f3ed752ef0ce64e38239536bc2a97f1bb1dad13fc0cb289329f397",
+   "bytes": 1657
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/scale-generator/.meta/proof.ci.js",
+   "sha256": "774e780949e2219aaff0eee441a29b96a89231a66f4687855df26ebf421cfea6",
+   "bytes": 1079
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/simple-linked-list/.meta/proof.ci.js",
+   "sha256": "c8eb6e748aae9465bb8ce57de49f805109af0c4be932705972b5d36258c43d6c",
+   "bytes": 948
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/space-age/.meta/proof.ci.js",
+   "sha256": "ecebd4f0fbe1bd67475b920b6059038d3ab6cb89b185c4019ae61b95b6a7cde5",
+   "bytes": 380
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/state-of-tic-tac-toe/.meta/proof.ci.js",
+   "sha256": "c9a64829d9e7348ded9b81bb19a09760c45cc1db45f07e1ff6e1afd976445d86",
+   "bytes": 1434
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/sum-of-multiples/.meta/proof.ci.js",
+   "sha256": "fc0c6ce982bf86086a90e446c8b2d1a5f067617f7eb19f363df61d3a37ff2b6c",
+   "bytes": 206
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/tournament/.meta/proof.ci.js",
+   "sha256": "8c665d0b2824576b1b978bd1ca32bf6842510f3d842199a5aea249ff08c6213f",
+   "bytes": 2164
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/transpose/.meta/proof.ci.js",
+   "sha256": "8d1279033fc94f24ec386d5b9a455c65decbb122c752acc7abb858a65a623f15",
+   "bytes": 501
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/triangle/.meta/proof.ci.js",
+   "sha256": "b22f7e7cab09b6c7009deaebb81a999a4545a31cc7475ec75216fb180da1e6e2",
+   "bytes": 786
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/twelve-days/.meta/proof.ci.js",
+   "sha256": "6283d4572bad7db5a6e49062ef2619393a1c38e41902c98b0ee307126915df29",
+   "bytes": 989
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/two-bucket/.meta/proof.ci.js",
+   "sha256": "4e74cde06bf36e3adf22c07eb352ffcc9a9b4e0cc01403476334744228e6b26e",
+   "bytes": 2327
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/variable-length-quantity/.meta/proof.ci.js",
+   "sha256": "e37035ad452dad81606b6108a24e300c917c76afed136c45896faa5e5008d650",
+   "bytes": 1065
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/word-search/.meta/proof.ci.js",
+   "sha256": "691acf16489184b4c5d294e9c710f3ca55d8c55f8a4b6e8f35c7dce6d0471fdd",
+   "bytes": 4202
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/wordy/.meta/proof.ci.js",
+   "sha256": "faf605269e12fc60675dde53f4a0e752b5ddcd1c1296ed3d2304b3bd0acba7d8",
+   "bytes": 1074
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/javascript/exercises/practice/zebra-puzzle/.meta/proof.ci.js",
+   "sha256": "d2449c97aedd6806811766c4b43929798428525bf13221697b006ede5bbaee05",
+   "bytes": 4357
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/alphametics/.meta/example.go",
+   "sha256": "c238e965240fe0637ecfe2f3ab9d46a75a79f57659bf3a50817d901f8bf2adeb",
+   "bytes": 4705
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/beer-song/.meta/example.go",
+   "sha256": "4c45b4d171efe4cbded4b0479577d9a655635d6da6b23d026cd8f20d5d4b206f",
+   "bytes": 1855
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/book-store/.meta/example.go",
+   "sha256": "652eb24e01b7e72f724c914e274c729c585e2f060b1cfc859bd634df0a48de27",
+   "bytes": 2019
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/bottle-song/.meta/example.go",
+   "sha256": "21fd2e3a76a660c60fdbe87fd20bd8331f1842ebd41b09e6bc1f88b1e8279bb4",
+   "bytes": 1329
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/bowling/.meta/example.go",
+   "sha256": "0afb526824852a07384de5757f9ec18764546548ab6e6439e7a8b52f476d110a",
+   "bytes": 4421
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/connect/.meta/example.go",
+   "sha256": "58ca1f08510c789e46dc19b36598406343366f36a647cd4fbdf56405643898de",
+   "bytes": 3924
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/counter/.meta/example.go",
+   "sha256": "4425b9600e13dd86e77a4577a6711749410cac5ea41f8c7b3bd08851db6017aa",
+   "bytes": 1965
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/crypto-square/.meta/example.go",
+   "sha256": "f1e61d312b1ad249949ca7c9c209a54b2e47c70ac0bbd2e6f1fba9d82fd8ff51",
+   "bytes": 623
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/dnd-character/.meta/example.go",
+   "sha256": "035528ad066a991d83862e9be937a7568451ce03efe5668f0ccfb0981463becc",
+   "bytes": 1059
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/dominoes/.meta/example.go",
+   "sha256": "30f11a129f7f113a1eea5c2f51b3697b9d6aa35117fb0b8333a7a986f8ca4d3e",
+   "bytes": 3657
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/error-handling/.meta/example.go",
+   "sha256": "36a064ce4b07786022803b5ad7d7f9b92e5b6632f7d43963bebaaf31f7ef5382",
+   "bytes": 473
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/food-chain/.meta/example.go",
+   "sha256": "b28e716ee4b7aa3f1fce48941e06797faf53deefeb13fc0f5d5ac8df6c9fdadf",
+   "bytes": 1184
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/forth/.meta/example.go",
+   "sha256": "4cdfaf4ab86f5cef9bbee8cf57ef429700901cce642a7ef6d715354e7458c3bb",
+   "bytes": 4827
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/hexadecimal/.meta/example.go",
+   "sha256": "185f7983e7f2d66bc1c683c8569e457da5aab5b3ae864653e07b0aef0077cdc8",
+   "bytes": 2082
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/kindergarten-garden/.meta/example.go",
+   "sha256": "eaed7fed5e59f52d8f7033bbfccbf2e2bc519f6113bdbe5ea2c8e7e6804acf42",
+   "bytes": 1273
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/ledger/.meta/example.go",
+   "sha256": "9c261c41ca354a09fe73c33bb48237478e20cb1cb1e8e5293bdda0fea7d03902",
+   "bytes": 3951
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/markdown/.meta/example.go",
+   "sha256": "9d0a5ffff9ab59f0a72493d58bfcc44fda273ebbff1aa77f7cd5f6adbb537aca",
+   "bytes": 1667
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/matrix/.meta/example.go",
+   "sha256": "ed65b9c954830fa2e0e546ba527281c60b8959eb53a2768e99130c2b3e965aa4",
+   "bytes": 1237
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/octal/.meta/example.go",
+   "sha256": "93d1772c105c4158911ca6dbdb42ee3c8170b2ce95a82fed9fd6e71c45e65fd9",
+   "bytes": 402
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/paasio/.meta/example.go",
+   "sha256": "bbe57c101df14b25f0d4a1cf7d1b54f71e6374d2b124b0ab244150105298bf0e",
+   "bytes": 1699
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/palindrome-products/.meta/example.go",
+   "sha256": "1924990583419dde0b82a041f8312847d14b951fae5c7ba45919ebeae735632a",
+   "bytes": 1018
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/pig-latin/.meta/example.go",
+   "sha256": "0afa53ce47ead0f63d7da5e9f2a7fa914678e66598a27bc6f7a9b0e94975393d",
+   "bytes": 837
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/poker/.meta/example.go",
+   "sha256": "64f032e280aafad8a4806b1336e8a3e59699b63ebb27a4a5b258a77d790b7278",
+   "bytes": 6564
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/pov/.meta/example.go",
+   "sha256": "65e1e41e21d54c63ada1f696a00dd1a28d712602c4b2a36494efb77e8c242217",
+   "bytes": 1930
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/protein-translation/.meta/example.go",
+   "sha256": "c7f35d75e1772f2072cdb96dd6b2ce1010b0054d55de1d003b8d9f99d19fb2c3",
+   "bytes": 1583
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/react/.meta/example.go",
+   "sha256": "9f526fa177d52f72de51234a47647322368557c43f3bff0fbd8e6a0e427dae30",
+   "bytes": 3003
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/robot-simulator/.meta/example.go",
+   "sha256": "91422182dcdba3dd182683611cda12bdbbedc4a208d47dd35cbd181f7e114f7d",
+   "bytes": 3030
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/say/.meta/example.go",
+   "sha256": "252cd3cc81c9b31f8ad6d30325ac103ffb3b0f5f34ff8444b1a5629386ece815",
+   "bytes": 1063
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/scale-generator/.meta/example.go",
+   "sha256": "ef700dc94b619e6a534f2253acbefbdc539cd88f6f4d86008eafa1b2eaa87208",
+   "bytes": 2635
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/simple-linked-list/.meta/example.go",
+   "sha256": "48d132005c66be4da3f57fafa9d5fe5e69d4bd0ce76f34c2991295e77d14be67",
+   "bytes": 1229
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/sublist/.meta/example.go",
+   "sha256": "81e1cd9ea39d04b3ddc3d9b4b097217503f17fefe333c702fdee76b014559f7d",
+   "bytes": 741
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/transpose/.meta/example.go",
+   "sha256": "0c179b70d014d6557ce54757d1997328997c476bfcfac838cb80ed66a0533d38",
+   "bytes": 398
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/tree-building/.meta/example.go",
+   "sha256": "be518cacc1ebd3c88ea056d16e9f818bdfd906d247e0833fea4aa091e55e3f1e",
+   "bytes": 1541
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/trinary/.meta/example.go",
+   "sha256": "4e049fa564d777e0834cd807d978a52b9d6984eeb610d4bba32cb04e536d4666",
+   "bytes": 549
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/two-bucket/.meta/example.go",
+   "sha256": "653cf33e430514255ac45c8ea0b55e1693b945184cf3e38105b1712bbca196b5",
+   "bytes": 4467
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/variable-length-quantity/.meta/example.go",
+   "sha256": "8e4a2c69f2a3c938b33009802b1dd82fde8f2c853ed2e69bc8c62b2b7add065c",
+   "bytes": 1880
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/word-search/.meta/example.go",
+   "sha256": "e82c3e1c4347748ed71536b4c12ad568c32b0ad858b32175f8030c9731c95607",
+   "bytes": 1630
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/wordy/.meta/example.go",
+   "sha256": "8e492ec31252bc085b43cc0fed93c60616456acb3fa1f9e017e3929ca5114856",
+   "bytes": 1122
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/go/exercises/practice/zebra-puzzle/.meta/example.go",
+   "sha256": "d2d2d282883aec3479f6f5fcd52a7d0ec34444f927f155ccaa3da5e41efd5374",
+   "bytes": 7277
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/accumulate/.meta/example.rs",
+   "sha256": "04b6f488a00454a89248bd91d496bb10ad2ecea5be7126ed31efe192acafacfc",
+   "bytes": 198
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/acronym/.meta/example.rs",
+   "sha256": "bbedf355314b044c1fc46036041d674c178cb9dc1a158bf5072131cf73f94bca",
+   "bytes": 715
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/alphametics/.meta/example.rs",
+   "sha256": "40d59dd5a797e4e668423e5193449698711f98ffb9cd81d19e36e7048d2fb09f",
+   "bytes": 2607
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/book-store/.meta/example.rs",
+   "sha256": "45b9b49aad3673a599632ae262a73f0bec5770bd9b275a6984df151e30398c9f",
+   "bytes": 6283
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/bowling/.meta/example.rs",
+   "sha256": "e426376afc91758c2ab6f5bb394ccbf230cb3294e0e5df3b08f9d55327b34efe",
+   "bytes": 3239
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/decimal/.meta/example.rs",
+   "sha256": "e12932974dca018da02db6297bb50a7aacc3746219b805ed6ae3c6b0ac4e5a4f",
+   "bytes": 6549
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/dot-dsl/.meta/example.rs",
+   "sha256": "5e5c94a59eb790b15f24bc2d8831af6163644c65affb08bc50e2c0c0a9c7198e",
+   "bytes": 3222
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/doubly-linked-list/.meta/example.rs",
+   "sha256": "18e882d786dfcce9c8415b7bacce94eea3894aff281d7d3b65e96a9423830758",
+   "bytes": 8949
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/fizzy/.meta/example.rs",
+   "sha256": "895ee475c69c4585db65581345219993a5a717771d0066f56e3f07a60227da80",
+   "bytes": 4625
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/forth/.meta/example.rs",
+   "sha256": "ef704d2864519848f5030e3144c0e7ef3dd0f62e6380307e2b44fb4a1c8d90f6",
+   "bytes": 4718
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/gigasecond/.meta/example.rs",
+   "sha256": "622c8110f153b419b35ea68f939d99381abf3ffee624fb0e8b0479bb2c1ad4ef",
+   "bytes": 145
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/grade-school/.meta/example.rs",
+   "sha256": "658aa33e71e6c4018e129d4ff159bab05602c5a7446814005f40bd71a09a1228",
+   "bytes": 1007
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/grep/.meta/example.rs",
+   "sha256": "c6b8a1dba1e09b98249c7bd320152590030fac9c8206819e6d45110d1b1484aa",
+   "bytes": 3145
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/luhn-from/.meta/example.rs",
+   "sha256": "cb97b796745acf573d315149f120e7dafbd010a1b4ac3070e06448103afbd13c",
+   "bytes": 1308
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/macros/.meta/example.rs",
+   "sha256": "c5d268a723779ef466bed60bca60c319ab11cc514fdc08dabbcb2af93e430421",
+   "bytes": 527
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/nucleotide-codons/.meta/example.rs",
+   "sha256": "fea45b5253fc92811574eba343cec0ce5af3f870d24f294736d8540238123054",
+   "bytes": 1460
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/ocr-numbers/.meta/example.rs",
+   "sha256": "81e713caf93f259dc5d9f91e6ae74cb055e63d7d5005e35b7178318ee13c34c6",
+   "bytes": 2504
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/parallel-letter-frequency/.meta/example.rs",
+   "sha256": "d6199536788f596e03010e6bab969251bf981e74a261ee8bfd9a7404b5ffca5e",
+   "bytes": 1787
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/pig-latin/.meta/example.rs",
+   "sha256": "55e9f3e163cc1d9b981cd6aaaeda0d765c26928abba4552e28c930ebd40f60b4",
+   "bytes": 910
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/poker/.meta/example.rs",
+   "sha256": "9b0f1528fc4759665e4cff1204107fd7788aa2a923c2ca30838ee520e45f9a6e",
+   "bytes": 10321
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/react/.meta/example.rs",
+   "sha256": "2164b2d739786c6ff8691db83372a9d74b53ed3d3100f1c7960fcfa46379706f",
+   "bytes": 7858
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/robot-name/.meta/example.rs",
+   "sha256": "293fd73202a5fba2b848542fe7a2c7d2baaf74d2b2b126c9b37a3841497519bb",
+   "bytes": 1066
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/say/.meta/example.rs",
+   "sha256": "24f681571763d2b7d034ee19ce8ee4175552e6fe3cf1d783a624a7c207707f8f",
+   "bytes": 1765
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/scale-generator/.meta/example.rs",
+   "sha256": "be65962eac1fefcdf10069719c77033acffa1a8bd4388a96517cb63f1a8090fd",
+   "bytes": 1709
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/simple-cipher/.meta/example.rs",
+   "sha256": "aa53f353a41c27c583958428812ae869d98be569762fe5cc184040d4c4bdc659",
+   "bytes": 1010
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/two-bucket/.meta/example.rs",
+   "sha256": "c053a0852c1c99771b38d00300f3a476dcc2e2c413b73caec4387755911e4e68",
+   "bytes": 4629
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/variable-length-quantity/.meta/example.rs",
+   "sha256": "b8aa2ddc54a86daea977b515eae32ff0b1f78feb0f05a56b1875618fd296d0f4",
+   "bytes": 3189
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/word-count/.meta/example.rs",
+   "sha256": "bdc290476a3902be516450124a3065dd9183eb777cc7a71c0bb35e72b1032c2c",
+   "bytes": 435
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/wordy/.meta/example.rs",
+   "sha256": "b1f6912250a7d789f6e179280cb3620dd9a25815abd2ccb8a3b9846b8aa4b48b",
+   "bytes": 2239
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/rust/exercises/practice/xorcism/.meta/example.rs",
+   "sha256": "7247e93dc6e2f8c38704993f6b84ff75c62f3734474997a4a88d2e7884c2bd75",
+   "bytes": 4198
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/affine-cipher/.meta/src/reference/java/AffineCipher.java",
+   "sha256": "1bcd55be33cbf765a63bad4171421245b694dbf6a09860d5d6660da44fa7d08d",
+   "bytes": 2488
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/all-your-base/.meta/src/reference/java/BaseConverter.java",
+   "sha256": "1690849198bcedab41571f4d241390606fcbe35e8732c5dfed86d44a8139eda8",
+   "bytes": 2451
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/alphametics/.meta/src/reference/java/Alphametics.java",
+   "sha256": "63ab53d27fd87c841eb18920fb42eb3ef4d917ff7a4af32fcf71901741f3ceda",
+   "bytes": 4911
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/alphametics/.meta/src/reference/java/UnsolvablePuzzleException.java",
+   "sha256": "65f42f548edde4d4e5d07fa0ae85a86cb4375c13240224fc4bbbd4a5fed057c4",
+   "bytes": 54
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/bank-account/.meta/src/reference/java/BankAccount.java",
+   "sha256": "d5de31859ef52edadb3e0539a37e76ec04ca2f11a512c736d370634cbfb9542c",
+   "bytes": 1905
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/bank-account/.meta/src/reference/java/BankAccountActionInvalidException.java",
+   "sha256": "0d191f597c7a3556aa647afdd7abe622e75a89548827ca4a4f46ee1ed3f71bb8",
+   "bytes": 149
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/book-store/.meta/src/reference/java/BookStore.java",
+   "sha256": "d03a0616c70d3afdb9d1297f99c89059537e81a0dcc6276a02a0042b782cdec7",
+   "bytes": 2853
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/bottle-song/.meta/src/reference/java/BottleSong.java",
+   "sha256": "3fc42f15abf784be7e2a58f005814dad8c583d1d634bd1cca875f8584a6ffd90",
+   "bytes": 2221
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/bowling/.meta/src/reference/java/BowlingGame.java",
+   "sha256": "9a4bcc5d250d0be5e7d47187a3236883c3ea5ad76850b55afb1107117cb66769",
+   "bytes": 1766
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/bowling/.meta/src/reference/java/Frame.java",
+   "sha256": "a18488597b9daa6828be828ee15c9dca3f103b89725e1a90e45e15ab74be6414",
+   "bytes": 2544
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/change/.meta/src/reference/java/ChangeCalculator.java",
+   "sha256": "0cf50d71bf867cb94cb17bd32a7b4012118c3f212905e2506fe39252f7dfaf4f",
+   "bytes": 2144
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/circular-buffer/.meta/src/reference/java/BufferIOException.java",
+   "sha256": "b4add2b98eb2caa74c0893ddc38f657afc7f5972966fb78958d2184812ad2173",
+   "bytes": 117
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/circular-buffer/.meta/src/reference/java/CircularBuffer.java",
+   "sha256": "baff33b46c0fc18efa7b8c5016e920a6c4e3fc4b4e956e30c44025f48f685458",
+   "bytes": 900
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/connect/.meta/src/reference/java/Board.java",
+   "sha256": "f9dc0d7423f9044ff78fcbb005e31af04bb0f0afe43cb0abefb36d918adfcc64",
+   "bytes": 5114
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/connect/.meta/src/reference/java/Connect.java",
+   "sha256": "9d0aa882570a0e877a796ed423fa6c1ffba611d46938a112fb70db46abfff2ed",
+   "bytes": 2233
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/connect/.meta/src/reference/java/UnionFind.java",
+   "sha256": "a5bca54e66e3e7af42c966ce93dd17e01097c364f7b0df093e1d28ce84769d0b",
+   "bytes": 3150
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/connect/.meta/src/reference/java/Winner.java",
+   "sha256": "043186d01486603b1b2b86c840c4ef5eac2e789062be9aa6cee4f4794922311b",
+   "bytes": 53
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/custom-set/.meta/src/reference/java/CustomSet.java",
+   "sha256": "6678d75b85d36b44ddd5c5c76efc5e1234223507abbb68cc8d4c97254f3ed18f",
+   "bytes": 1831
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/dominoes/.meta/src/reference/java/ChainNotFoundException.java",
+   "sha256": "e604f65f21da5daade5593d39faf7b185c55eba20df165d26a42381343c9a545",
+   "bytes": 134
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/dominoes/.meta/src/reference/java/Domino.java",
+   "sha256": "8bf9501a18b5cbdeea04070b0af6c341cb6ba48d8dc9fc0ab10634422a3a523b",
+   "bytes": 905
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/dominoes/.meta/src/reference/java/Dominoes.java",
+   "sha256": "4b6e738754477d80df317de469c0cab4da788bedbdb1689b73ca671700c1fdfe",
+   "bytes": 2308
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/food-chain/.meta/src/reference/java/FoodChain.java",
+   "sha256": "a33f5b0d6f678f59c04bcf6d280e373a13c1b1afae98bd9b6a748b6f91bf5c70",
+   "bytes": 2006
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/forth/.meta/src/reference/java/ForthEvaluator.java",
+   "sha256": "ba02fd104d0f1117dfae22d5544bdbded7718ff98dddd342a3681d669605f9d1",
+   "bytes": 6696
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/forth/.meta/src/reference/java/Token.java",
+   "sha256": "6601cced87810e64b0cdeff3c66339558b50f9fb9810160c53d7be8dd5defad4",
+   "bytes": 2537
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/go-counting/.meta/src/reference/java/GoCounting.java",
+   "sha256": "e82f5d4b25f79538b1df83c37cf648fdd685a237a29f64790fce734aa36dbeef",
+   "bytes": 4339
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/go-counting/.meta/src/reference/java/Player.java",
+   "sha256": "f778009d3d4063e4fdfb093ffd8ff5359020b005d55568aaed4ef5be56d120f9",
+   "bytes": 39
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/hangman/.meta/src/reference/java/Hangman.java",
+   "sha256": "5d816c8fd6bedff9fa3a1d4a92e4c54b0686b3ece1e79666c09997358ec748e3",
+   "bytes": 2540
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/hangman/.meta/src/reference/java/Output.java",
+   "sha256": "8fceb39c5cd8ee2280989eee095ca5821c50d1817cbbe48ea5244fcc27d26327",
+   "bytes": 2484
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/hangman/.meta/src/reference/java/Part.java",
+   "sha256": "ae845f517974bc814c6788bcf564b2f591654965373c59d5c74bd78087d79f1a",
+   "bytes": 91
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/hangman/.meta/src/reference/java/Status.java",
+   "sha256": "e1eed926f0675466747105e3dbef6f13a9b7cdf0e6c7a02ce460a480899850cd",
+   "bytes": 47
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/house/.meta/src/reference/java/House.java",
+   "sha256": "970cee058ef6fbdbbc0a35da78c000d23ea51950f9b7b9fca4ff2a967ef4a67a",
+   "bytes": 1352
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/kindergarten-garden/.meta/src/reference/java/KindergartenGarden.java",
+   "sha256": "63744febd199845f12344b0db913739395ff2ab34efb05d71b6613c9fff947e7",
+   "bytes": 1386
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/kindergarten-garden/.meta/src/reference/java/Plant.java",
+   "sha256": "a2d6406f19bae36bba03dd440c8e2a9e3d91052871ac4f9ab91d69ad0d40b943",
+   "bytes": 391
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/ledger/.meta/src/reference/java/Ledger.java",
+   "sha256": "2f2958cb039695dd234c565714f8fa3ef328ae7aa3d8979ac1e6c69ec0d23a4b",
+   "bytes": 5590
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/mazy-mice/.meta/src/reference/java/Dimensions.java",
+   "sha256": "ec90492ca73e6c3dc06fed0b859df4bca2c1476e4c89d63e405f398f618a4e3b",
+   "bytes": 599
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/mazy-mice/.meta/src/reference/java/MazeGenerator.java",
+   "sha256": "5abc434e312fadf2e426a93095f24a96a270ea069740ba1b9d73b8ef106b373a",
+   "bytes": 5307
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/ocr-numbers/.meta/src/reference/java/Digit.java",
+   "sha256": "0cf9573f53231fbc766c7500ccfc14957288ebbb08d74e95ce9980c66e52b21d",
+   "bytes": 1300
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/ocr-numbers/.meta/src/reference/java/OpticalCharacterReader.java",
+   "sha256": "0badb5cc10d707a1c70c32dc58a51608c33fb5bc5fcc100732342e5424e26f84",
+   "bytes": 2450
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/palindrome-products/.meta/src/reference/java/PalindromeCalculator.java",
+   "sha256": "c4656a99e1a2b3044ac4afabb3f3da71f1de0226e95d38e7baea77e3b8a6baef",
+   "bytes": 1575
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/phone-number/.meta/src/reference/java/PhoneNumber.java",
+   "sha256": "ad7fcfd75a8abcb16bec547c9fbd6db5a40ce59bed61168a254fbd7a79c7b8ee",
+   "bytes": 2148
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/pig-latin/.meta/src/reference/java/PigLatinTranslator.java",
+   "sha256": "359cf8b7559d1ed5471b31a006d84f4a7f805552ae5557156da663a0689cae9d",
+   "bytes": 2374
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/poker/.meta/src/reference/java/Card.java",
+   "sha256": "2ca64d6371b490ad977be093db92eac39865b99fd5ebc9bbb53a77f4630b29e8",
+   "bytes": 550
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/poker/.meta/src/reference/java/Hand.java",
+   "sha256": "006141068b4fdb0f8a6ba1ebb662eabae5a164698c313d60f72bd81219857576",
+   "bytes": 5270
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/poker/.meta/src/reference/java/Poker.java",
+   "sha256": "b0f83242f2124f83ff120341dfad04ed056954ece50cdb39f4fc20a216437163",
+   "bytes": 968
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/pov/.meta/src/reference/java/Tree.java",
+   "sha256": "0e99fa705a791680ae335b6cde73d8be1586913ac4ae78a34f5539ab4a7f2130",
+   "bytes": 4234
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/protein-translation/.meta/src/reference/java/ProteinTranslator.java",
+   "sha256": "61455a46f297a1aaa3421dea3583038016a69d6f6873bcaad113a6b112f160e1",
+   "bytes": 1713
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/pythagorean-triplet/.meta/src/reference/java/PythagoreanTriplet.java",
+   "sha256": "c21f88f26f9ec9446557575045e9418c3119181093909325111908437ff2cb21",
+   "bytes": 1789
+  },
+  {
+   "url": "https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/java/exercises/practice/queen-attack/.meta/src/reference/java/Queen.java",
+   "sha256": "b4a3302e36a727207687d07562b99b562882ddc10c3d31f8089e5d8c67972b11",
+   "bytes": 841
+  }
+ ],
+ "runtime_s": 35.5
+}
