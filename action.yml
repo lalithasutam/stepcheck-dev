@@ -1,8 +1,12 @@
 name: "StepCheck gate"
 description: >-
-  Run StepCheck's headless gate on a repository: every tracked module must parse, match
-  its DSSE attestation, hold no DIRTY_OMISSION_RISK and pass Gates A/B/C; then post the
-  blast-radius and in-toto provenance checklist to the job summary and as an artifact.
+  Gate a repository with StepCheck. On a pull request every changed module is judged against
+  the base revision through Gates A/B/C (dropped or weakened guards, widened or swallowing
+  exception handlers, stubbed bodies, stripped decorators) and the verdict is posted to the job
+  summary as a PR-comment table; the check fails on a silent regression. On a push (no base)
+  the whole tree runs through `stepcheck ci --report`: every tracked module must parse, match
+  its DSSE attestation, hold no DIRTY_OMISSION_RISK and pass Gates A/B/C, and the blast-radius
+  and in-toto provenance checklist is posted and uploaded.
 author: "StepCheck Dev"
 branding:
   icon: "shield"
@@ -13,20 +17,28 @@ inputs:
     description: "Project root to verify (relative to the checkout)"
     required: false
     default: "."
+  base:
+    description: "Git revision to judge the change against (default: the pull request's base sha; empty on a push)"
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
   python-version:
     description: "Python version to run StepCheck with"
     required: false
     default: "3.12"
   report-path:
-    description: "Where to write the Markdown blast-radius & provenance report"
+    description: "Where to write the Markdown report (the PR table, or the blast-radius & provenance checklist on a push)"
     required: false
     default: "stepcheck-report.md"
+  fail-on-catch:
+    description: "Pull requests: fail the check when a silent regression (or a parse failure) is found; 'false' reports only"
+    required: false
+    default: "true"
   fail-on-dirty:
-    description: "Fail the job on any gate failure or unresolved DIRTY_OMISSION_RISK (set false to warn only)"
+    description: "Pushes: fail the job on any gate failure or unresolved DIRTY_OMISSION_RISK (set false to warn only)"
     required: false
     default: "true"
   version:
-    description: "stepcheck-dev version specifier to install from PyPI"
+    description: "stepcheck-dev version specifier to install from PyPI (`stepcheck diff` needs 0.3.5 or newer)"
     required: false
     default: ">=0.2.0"
 
@@ -55,27 +67,41 @@ runs:
       shell: bash
       env:
         STEPCHECK_PATH: ${{ inputs.path }}
+        STEPCHECK_BASE: ${{ inputs.base }}
         STEPCHECK_REPORT: ${{ inputs.report-path }}
+        STEPCHECK_FAIL_ON_CATCH: ${{ inputs.fail-on-catch }}
         STEPCHECK_FAIL_ON_DIRTY: ${{ inputs.fail-on-dirty }}
+        STEPCHECK_HOOK_AUTOSTART: "0"
       run: |
         set -o pipefail
         status=0
-        stepcheck ci "$STEPCHECK_PATH" --report --report-out "$STEPCHECK_REPORT" | tee stepcheck-ci.log || status=$?
+        if [ -n "$STEPCHECK_BASE" ]; then
+          # a pull request: the changed modules against the base revision, as a PR-comment table
+          git -C "$STEPCHECK_PATH" cat-file -e "$STEPCHECK_BASE^{commit}" 2>/dev/null || git -C "$STEPCHECK_PATH" fetch --quiet --depth=1 origin "$STEPCHECK_BASE" || true
+          stepcheck diff "$STEPCHECK_PATH" --base "$STEPCHECK_BASE" --markdown | tee "$STEPCHECK_REPORT" || status=$?
+          fail="$STEPCHECK_FAIL_ON_CATCH"
+          what="StepCheck found a silent regression (exit $status); see the job summary"
+        else
+          # a push: the whole tree through the headless gate, with the blast-radius & provenance checklist
+          stepcheck ci "$STEPCHECK_PATH" --report --report-out "$STEPCHECK_REPORT" | tee stepcheck-ci.log || status=$?
+          fail="$STEPCHECK_FAIL_ON_DIRTY"
+          what="stepcheck ci failed (exit $status): a gate rejected a module or DIRTY_OMISSION_RISK is unresolved"
+        fi
         if [ -f "$STEPCHECK_REPORT" ]; then
           cat "$STEPCHECK_REPORT" >> "$GITHUB_STEP_SUMMARY"
         else
-          { echo "## StepCheck gate"; echo; echo '```'; cat stepcheck-ci.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "## StepCheck gate"; echo; echo '```'; cat stepcheck-ci.log 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
         fi
         echo "report=$STEPCHECK_REPORT" >> "$GITHUB_OUTPUT"
         if [ "$status" -eq 0 ]; then
           echo "verdict=PASS" >> "$GITHUB_OUTPUT"
         else
           echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
-          if [ "$STEPCHECK_FAIL_ON_DIRTY" = "true" ]; then
-            echo "::error::stepcheck ci failed (exit $status): a gate rejected a module or DIRTY_OMISSION_RISK is unresolved"
+          if [ "$fail" = "true" ]; then
+            echo "::error::$what"
             exit "$status"
           fi
-          echo "::warning::stepcheck ci failed (exit $status) but fail-on-dirty is false"
+          echo "::warning::$what (reporting only)"
         fi
 
     - name: Upload the report

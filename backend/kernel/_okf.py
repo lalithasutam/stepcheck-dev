@@ -45,6 +45,10 @@ def harvest_invariants(source: str) -> list[str]:
     found: list[str] = []
     if "okf-invariant" not in source:
         return found  # tokenizing a 10k-line module costs more than every other step of its analysis
+    key = (hash(source), len(source))
+    hit = _HARVEST_CACHE.get(key)
+    if hit is not None:
+        return list(hit)
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
             if tok.type == tokenize.COMMENT:
@@ -53,7 +57,13 @@ def harvest_invariants(source: str) -> list[str]:
                     found.append(m.group(1).strip())
     except tokenize.TokenizeError:
         pass
+    if len(_HARVEST_CACHE) >= 64:
+        _HARVEST_CACHE.pop(next(iter(_HARVEST_CACHE)))
+    _HARVEST_CACHE[key] = tuple(found)
     return found
+
+
+_HARVEST_CACHE: dict[tuple[int, int], tuple[str, ...]] = {}  # one tokenize per text, however many analyses ask
 
 
 PERF = {"analysis_full": 0, "analysis_incremental": 0, "analysis_memory_hits": 0, "analysis_disk_hits": 0,
@@ -519,7 +529,7 @@ def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manu
 
 
 def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str], *,
-            previous: ModuleInfo | None = None, tree: ast.Module | None = None) -> ModuleInfo:
+            previous: ModuleInfo | None = None, tree: ast.Module | None = None, mine: bool = True) -> ModuleInfo:
     """Parse one module into its OKF facts. Raises SyntaxError on broken source.
     `previous` (the same file's last analysis) makes the mining incremental: only the
     top-level symbols the edit can affect are re-mined; the content-addressed cache
@@ -541,6 +551,12 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     key = _content_key(path, source)
     facts = _recall(key)
+    if facts is None and not mine:
+        # `mine=False` (a structural judgement of a transition): the facts without any mined
+        # invariant; never remembered, so an unmined entry can never answer a real analysis
+        exports, preserved_base = top_level_facts(tree)
+        called, statements = _call_and_import_facts(tree, source)
+        facts = (exports, preserved_base, harvest_invariants(source), [], called, statements)
     if facts is None:
         exports, preserved_base = top_level_facts(tree)
         manual = harvest_invariants(source)
@@ -551,7 +567,9 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
                 PERF["analysis_incremental"] += 1
         if mined is None:
             PERF["analysis_full"] += 1
-            mined = _dedup_mined(mine_guard_invariants(tree) + mine_branch_invariants(tree) + mine_structural_guards(tree), manual)
+            covered: set = set()  # the probes' guards, so the structural miner does not run the probe miner again
+            probes = mine_guard_invariants(tree, covered)
+            mined = _dedup_mined(probes + mine_branch_invariants(tree) + mine_structural_guards(tree, covered=covered), manual)
         called, statements = _call_and_import_facts(tree, source)
         facts = (exports, preserved_base, manual, mined, called, statements)
         _remember(key, facts)
@@ -1436,9 +1454,10 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list
     if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
         body = body[1:]
     direct = {id(stmt) for stmt in body if isinstance(stmt, ast.If)}
-    elifs = {id(n.orelse[0]) for n in _own_nodes(body)
+    own = list(_own_nodes(body))  # one walk of the def's own nodes serves every pass below
+    elifs = {id(n.orelse[0]) for n in own
              if isinstance(n, ast.If) and len(n.orelse) == 1 and isinstance(n.orelse[0], ast.If)}
-    for node in _own_nodes(body):
+    for node in own:
         if isinstance(node, ast.If) and node.body:
             last = node.body[-1]
             if isinstance(last, ast.Raise):
@@ -1468,7 +1487,7 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list
     return out
 
 
-def mine_structural_guards(tree: ast.Module, only: set[str] | None = None) -> list[str]:
+def mine_structural_guards(tree: ast.Module, only: set[str] | None = None, covered: set | None = None) -> list[str]:
     """`guard:<Symbol>:<clause>` for every guard clause (see `_py_guards`) of every
     top-level function and class method — no runtime argument synthesis, so
     methods, external types (`isinstance(x, CookieJar)`), asserts and non-leading
@@ -1476,9 +1495,13 @@ def mine_structural_guards(tree: ast.Module, only: set[str] | None = None) -> li
     in its symbol's body unless the commit declares the deletion. A leading guard
     the runtime miner already exercises (`call:fn(…) raises Exc`) is left to that
     semantic check, so an equivalent rewrite of its condition still passes.
-    `only` restricts the walk to the top-level symbols named (incremental analysis)."""
-    covered: set = set()
-    mine_guard_invariants(tree, covered, only={k for k in only if "." not in k} if only is not None else None)
+    `only` restricts the walk to the top-level symbols named (incremental analysis).
+    `covered` is the (function, guard test) set the runtime miner already filled when the
+    caller ran it — an empty set keeps every guard structural, which is what a judgement
+    without runtime probes needs."""
+    if covered is None:
+        covered = set()
+        mine_guard_invariants(tree, covered, only={k for k in only if "." not in k} if only is not None else None)
     symbols = _py_symbols(tree.body) if only is None else _scoped_symbols(tree, only)
     return [f"guard:{sym}:{g}" for sym, fn in symbols for g in _py_guards(fn, True)
             if not any(sym == name and g.startswith(f"if {test} raises ") for name, test in covered)]
@@ -2521,13 +2544,23 @@ def foreign_module(source: str):
     return _ts
 
 
+_PRESENT_CACHE: dict[tuple, frozenset] = {}  # (hash(source), len, path) -> present guards: Gate C and a report ask alike
+
+
 def present_guards(source: str, path: str | None = None) -> set[str]:
     """Every `guard:<symbol>:<cond> <effect>` structurally present in `source`
     (at any depth of the symbol's body), for Gate C's conservation check."""
+    key = (hash(source), len(source), path)
+    hit = _PRESENT_CACHE.get(key)
+    if hit is not None:
+        return set(hit)
     mod = (lang_module(path) if path else None) or foreign_module(source)
     if mod is None:
         try:
-            return present_structural_guards(ast.parse(source))
-        except SyntaxError:
-            return set()
-    return set(mod.present_guards(source)) if hasattr(mod, "present_guards") else set()
+            out = present_structural_guards(parse_cached(source))
+        except (SyntaxError, ValueError):
+            out = set()
+    else:
+        out = set(mod.present_guards(source)) if hasattr(mod, "present_guards") else set()
+    _lru_put(_PRESENT_CACHE, key, frozenset(out), 64)
+    return out

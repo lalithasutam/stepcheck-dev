@@ -97,7 +97,7 @@ key. Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 363 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/tests/` | 376 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.4% tokens saved) + review generator |
@@ -124,7 +124,15 @@ stepcheck hooks             # .claude/hooks + settings wiring: Read over thresho
 stepcheck compliance        # attestation.intoto.json (in-toto Statement v1: every tracked file + sha256, gate verdicts, Merkle root, DSSE envelopes) + DUC.json / DUA-E.json
 stepcheck ci . --report     # the headless gate plus a Markdown PR checklist: touched modules, re-verified callers, conserved symbols, in-toto digests
 stepcheck audit --card      # stepcheck-audit-card.svg + a copy-paste badge line; file names and session ids never appear
+stepcheck retro . --commits 50   # the git time machine: every commit's modified modules through Gates B/C — guard drops, flips, neuters, stubbed bodies, stripped decorators; structural by default and parallel (--probes: runtime call: checks too; --all: structural removals + test files; --json)
+stepcheck diff . [--staged | --base origin/main...HEAD] [--markdown]   # the working tree, the index or a PR against its baseline; exit 1 on a silent regression
+stepcheck allow <file> [symbol] --reason "..."   # declare one intended guard / symbol removal for the next native-tool edit (.stepcheck/declared.jsonl; consumed once)
+stepcheck connect .         # hooks + .mcp.json + session + a git pre-commit gate (`diff --staged`, chains your existing hook) + .cursor/mcp.json when .cursor/ exists; `disconnect` undoes it
 ```
+
+`action.yml` is a composite GitHub Action: on a pull request it runs `stepcheck diff --base <base sha> --markdown`, writes the
+table to the job summary and fails the check on a silent regression (`fail-on-catch: 'false'` to report only); on a push it
+runs `stepcheck ci`.
 
 ## Door 1: accordion compaction and tier routing
 
@@ -240,7 +248,7 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 363 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 376 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
@@ -465,6 +473,43 @@ module. A patch that cannot fold is a `MechanicalError` at Gate A.
 `error` (a `GateError` or `None`), `attestation` (envelope dict when accepted), `dirtied[]`
 (node_ids transitioned to `DIRTY_OMISSION_RISK`), `reverified[]` (dependents re-checked in memory
 and re-attested instead — see OmissionRisk).
+
+**judge_transition / retro / diff** — `StateKernel.judge_transition(path, before, after)` runs
+Gates A → B → C on one module's before → after pair in an in-memory single-module session (an
+ephemeral kernel; nothing lands, nothing is written; no dependent is present, so Gate A is the
+parse). `stepcheck retro [path] [--commits N] [--all] [--json]` walks the last N non-merge commits
+with one `git log --raw` and one `git cat-file --batch` and judges every modified supported
+source file; findings are **Tier 1** (silent regressions, shown by default: a guard dropped,
+flipped or neutered inside a surviving function, an exception handler widened or swallowing,
+a body replaced by a stub, a decorator stripped from a surviving symbol) or **Tier 2**
+(structural removals — a whole symbol or signature gone, a mass deletion — counted in the
+footer, listed with `--all`); test files are skipped unless `--all`. `retro` is **structural by
+default** (`judge_transition(run_probes=False)`): every guard clause of the held text — the
+leading guards a runtime probe would own included — is held as a `guard:` invariant and the
+staged text is not mined, so the sandbox never loads (a historical blob has no sibling modules
+to import) and every Tier 1 catch is an AST fact; `--probes` adds the runtime `call:` checks,
+whose load failures are then counted, not reported. Transitions are independent and are judged
+by `--jobs` worker processes (default: cores up to 8). `stepcheck diff [path] [--staged] [--base <ref>] [--markdown] [--json]` judges the
+working tree, the index or a pull request (`A...B` is the merge base) the same way and exits 1
+on a Tier 1 finding or a parse failure; `--markdown` is the PR-comment table `action.yml` posts.
+
+**Declared allowance** — `stepcheck allow <file> [symbol] --reason "<why>"` appends one line to
+`<repo>/.stepcheck/declared.jsonl` bound to the file's repo-relative path, the optional symbol
+and the sha256 of the file *before* the edit. A native PreToolUse Edit / Write / MultiEdit that
+Gate B or C would deny then passes once as a declared deletion (`allow_deletion=True`), the
+written bytes are adopted the same way, the allowance is marked used, and the next edit of the
+file is gated strictly again; the deny banner carries the `stepcheck allow …` hint. An agent's
+own Bash command that invokes `stepcheck allow` or edits `declared.jsonl` is answered
+`permissionDecision: "ask"` — the human approves the request, the agent cannot rubber-stamp its
+own guard drop. The MCP route stays `commit_verified_step(..., allow_deletion=true)`.
+
+**Pre-commit gate / connect / disconnect** — `stepcheck connect [path]` also installs
+`.git/hooks/pre-commit` (a pre-existing hook is kept and chained as `pre-commit.stepcheck-chained`;
+the script exits in shell time when no supported source file is staged, else runs `stepcheck
+diff --staged`), writes `.cursor/mcp.json` when `.cursor/` exists (or `--cursor`), and ends with a
+one-second `retro` teaser of the last 20 commits; `--no-git-hook` / `--no-cursor` / `--no-retro`
+opt out. `stepcheck disconnect [path]` removes the gate (restoring the chained hook), the Cursor
+and `.mcp.json` entries and the Claude Code hooks; sessions, frames and attestations are kept.
 
 **verify_node** — `StateKernel.verify_node(session_id, node_id)`: the read-only check `stepcheck
 ci` runs on a module nothing attests. Gate A on the bytes the node holds, then the invariants on

@@ -41,6 +41,7 @@ its start, a daemon is restarted so the session never runs stale kernel code, an
 a gateway started by hand is left running with a note asking for a restart."""
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -273,7 +274,9 @@ def main() -> int:
         out = json.loads(_post(json.dumps(event).encode("utf-8")) or b"{}")
     except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout
         offline = f"gateway offline ({exc.__class__.__name__})"
-        if event.get("hook_event_name", "PreToolUse") == "PreToolUse" and event.get("tool_name") not in EDIT_TOOLS:
+        command = str((event.get("tool_input") or {}).get("command") or "") if event.get("tool_name") == "Bash" else ""
+        sovereign = bool(re.search(r"(?:^|[\s;&|(`])stepcheck(?:\.exe)?\s+allow\b|declared\.jsonl", command, re.I))
+        if event.get("hook_event_name", "PreToolUse") == "PreToolUse" and event.get("tool_name") not in EDIT_TOOLS and not sovereign:
             # Read: nothing to gate, so leave before importing anything heavier — the
             # offline fast path. Autostart, when on, still kicks the daemon so the
             # next call is answered warm.

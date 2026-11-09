@@ -58,6 +58,7 @@ import os
 import re
 from pathlib import Path
 
+import declared
 from kernel import StateKernel, _okf, _tokens
 
 DEFAULT_READ_THRESHOLD = 1500
@@ -341,9 +342,25 @@ def _read_context(sid: str, node: dict, raw_tokens: int, payload) -> str:
     )
 
 
+def _ask(reason: str) -> dict:
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": reason}}
+
+
+def _bash_guard(tool_input: dict) -> dict:
+    """An agent declaring its own allowance (`stepcheck allow …`, or a write to
+    `.stepcheck/declared.jsonl`) is a request the human must approve, not a rubber stamp."""
+    command = str(tool_input.get("command") or "")
+    if not declared.is_tampering_command(command):
+        return {}
+    return _ask("StepCheck: this command declares a contract change (a guard or preserved symbol may be dropped on the "
+                f"next edit). Approve only if you asked for it. Command: {command.strip()[:400]}")
+
+
 def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
     tool = event.get("tool_name")
     tool_input = event.get("tool_input") or {}
+    if tool == "Bash":
+        return _bash_guard(tool_input)
     file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not file_path:
         return {}
@@ -404,15 +421,29 @@ def _pre_tool_use(event: dict, kernel: StateKernel) -> dict:
         staged = _stage_edit(tool, tool_input, current)
         if staged is not None:
             verdict = kernel.commit(sid, node["node_id"], source=staged, dry_run=True)
+            if not verdict.accepted and verdict.gate in ("B", "C"):
+                touched = changed_symbols(node["path"], current, staged)
+                allowance = declared.find(root, node["path"], current, touched)
+                if allowance is not None:
+                    declared_verdict = kernel.commit(sid, node["node_id"], source=staged, dry_run=True, allow_deletion=True)
+                    if declared_verdict.accepted:
+                        declared.consume(root, allowance, staged)
+                        note = (f"StepCheck: Gate {verdict.gate} would have refused this edit ({str(verdict.error)[:160]}); it passes "
+                                f"as the contract change declared by `stepcheck allow` — reason: {allowance.get('reason')}. "
+                                "The allowance is now used; the next edit of this file is gated strictly again.")
+                        record_catch(root, module=node["node_id"], symbol=(touched[0] if touched else allowance.get("symbol") or "module"),
+                                     gate=verdict.gate, code="DECLARED_ALLOWANCE", reason=note, hook="PreToolUse", tool=tool, session_id=sid)
+                        return _allow(note)
             if not verdict.accepted:
                 text = str(verdict.error)
                 touched = changed_symbols(node["path"], current, staged)
                 symbol = touched[0] if len(touched) == 1 else symbol_of(text, node["node_id"])
                 if symbol == "module" and touched:
                     symbol = touched[0]
+                hint = (" " + declared.hint(node["path"], symbol)) if verdict.gate in ("B", "C") else ""
                 reason = banner(verdict.gate, node["node_id"], symbol,
                                 f"{text}. Fix the violation (preserve required exports, decorators, and guard "
-                                "invariants) and retry the edit.")
+                                f"invariants) and retry the edit.{hint}")
                 record_catch(root, module=node["node_id"], symbol=symbol, gate=verdict.gate,
                              code=code_of(verdict.gate, verdict.error, text), reason=reason,
                              hook="PreToolUse", tool=tool, session_id=sid)
@@ -531,6 +562,16 @@ def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
     refused = kernel.sync(sid, node["node_id"])["rejected"].get(node["node_id"])
     if not refused:
         return {}
+    try:  # the bytes a declared allowance let through land as the declared deletion they are
+        disk = _okf.decode_source((root / node["path"]).read_bytes())
+    except (OSError, UnicodeError):
+        disk = None
+    if disk is not None and declared.declared_result(root, node["path"], disk) is not None:
+        landed = kernel.commit(sid, node["node_id"], source=disk, allow_deletion=True)
+        if landed.accepted:
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                           "additionalContext": f"StepCheck: adopted the declared contract change of {node['path']} "
+                                                                f"(attestation {landed.attestation['payload']['sha256'][:12]}…)."}}
     gate, rest = _split_refusal(refused)
     symbol = symbol_of(rest, node["node_id"])
     text = banner(gate, node["path"], symbol,

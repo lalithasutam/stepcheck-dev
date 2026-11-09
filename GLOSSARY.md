@@ -202,6 +202,43 @@ module. A patch that cannot fold is a `MechanicalError` at Gate A.
 (node_ids transitioned to `DIRTY_OMISSION_RISK`), `reverified[]` (dependents re-checked in memory
 and re-attested instead — see OmissionRisk).
 
+**judge_transition / retro / diff** — `StateKernel.judge_transition(path, before, after)` runs
+Gates A → B → C on one module's before → after pair in an in-memory single-module session (an
+ephemeral kernel; nothing lands, nothing is written; no dependent is present, so Gate A is the
+parse). `stepcheck retro [path] [--commits N] [--all] [--json]` walks the last N non-merge commits
+with one `git log --raw` and one `git cat-file --batch` and judges every modified supported
+source file; findings are **Tier 1** (silent regressions, shown by default: a guard dropped,
+flipped or neutered inside a surviving function, an exception handler widened or swallowing,
+a body replaced by a stub, a decorator stripped from a surviving symbol) or **Tier 2**
+(structural removals — a whole symbol or signature gone, a mass deletion — counted in the
+footer, listed with `--all`); test files are skipped unless `--all`. `retro` is **structural by
+default** (`judge_transition(run_probes=False)`): every guard clause of the held text — the
+leading guards a runtime probe would own included — is held as a `guard:` invariant and the
+staged text is not mined, so the sandbox never loads (a historical blob has no sibling modules
+to import) and every Tier 1 catch is an AST fact; `--probes` adds the runtime `call:` checks,
+whose load failures are then counted, not reported. Transitions are independent and are judged
+by `--jobs` worker processes (default: cores up to 8). `stepcheck diff [path] [--staged] [--base <ref>] [--markdown] [--json]` judges the
+working tree, the index or a pull request (`A...B` is the merge base) the same way and exits 1
+on a Tier 1 finding or a parse failure; `--markdown` is the PR-comment table `action.yml` posts.
+
+**Declared allowance** — `stepcheck allow <file> [symbol] --reason "<why>"` appends one line to
+`<repo>/.stepcheck/declared.jsonl` bound to the file's repo-relative path, the optional symbol
+and the sha256 of the file *before* the edit. A native PreToolUse Edit / Write / MultiEdit that
+Gate B or C would deny then passes once as a declared deletion (`allow_deletion=True`), the
+written bytes are adopted the same way, the allowance is marked used, and the next edit of the
+file is gated strictly again; the deny banner carries the `stepcheck allow …` hint. An agent's
+own Bash command that invokes `stepcheck allow` or edits `declared.jsonl` is answered
+`permissionDecision: "ask"` — the human approves the request, the agent cannot rubber-stamp its
+own guard drop. The MCP route stays `commit_verified_step(..., allow_deletion=true)`.
+
+**Pre-commit gate / connect / disconnect** — `stepcheck connect [path]` also installs
+`.git/hooks/pre-commit` (a pre-existing hook is kept and chained as `pre-commit.stepcheck-chained`;
+the script exits in shell time when no supported source file is staged, else runs `stepcheck
+diff --staged`), writes `.cursor/mcp.json` when `.cursor/` exists (or `--cursor`), and ends with a
+one-second `retro` teaser of the last 20 commits; `--no-git-hook` / `--no-cursor` / `--no-retro`
+opt out. `stepcheck disconnect [path]` removes the gate (restoring the chained hook), the Cursor
+and `.mcp.json` entries and the Claude Code hooks; sessions, frames and attestations are kept.
+
 **verify_node** — `StateKernel.verify_node(session_id, node_id)`: the read-only check `stepcheck
 ci` runs on a module nothing attests. Gate A on the bytes the node holds, then the invariants on
 record executed through Gate C — every invariant of an analysed node, the hand-written

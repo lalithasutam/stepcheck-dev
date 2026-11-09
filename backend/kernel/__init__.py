@@ -12,6 +12,7 @@ Everything in `_`-prefixed modules is implementation, never interface.
 from __future__ import annotations
 
 import ast
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -241,6 +242,7 @@ class _Node:
         return self._source
 
 
+_STRUCTURAL_CACHE: dict[tuple, tuple] = {}  # (path, hash, len) -> every guard clause of a text, for judgements
 LAZY_THRESHOLD = 200  # files; a larger tree is indexed lazily (STEPCHECK_LAZY_THRESHOLD overrides)
 LAZY_BYTES = 524_288  # or more tracked source bytes than this (STEPCHECK_LAZY_BYTES overrides)
 
@@ -270,6 +272,8 @@ class _Session:
     git_head: str | None = None
     # Whether the tree was indexed lazily (every discovered file is a node, analysed on demand).
     lazy: bool = False
+    # Not persisted: a judgement session without runtime probes (the staged text is not mined).
+    structural: bool = False
     # Not persisted: ((root package, node count), import map) — see StateKernel._modules.
     modules: tuple | None = None
     # Not persisted: st_mtime_ns of the session file when this process last read
@@ -423,6 +427,77 @@ class StateKernel:
         """node_id -> tracked path, for every node, without analysing any of them."""
         return {nid: n.path for nid, n in self._session(session_id).nodes.items()}
 
+    def judge_transition(self, path: str | Path, before: str, after: str, *, allow_deletion: bool = False,
+                         root: str | Path | None = None, run_probes: bool = True) -> CommitVerdict:
+        """Gates A → B → C on one module's transition from `before` to `after`, in an
+        in-memory single-module session that lands nothing and writes nothing — what
+        `stepcheck retro` runs on every commit of a history and `stepcheck diff` on a
+        working tree. No dependent is in the session, so Gate A is the parse; Gates B and
+        C run exactly as for a commit. `root` points the read-only analysis cache (and the
+        root package) at the project the file comes from. `run_probes=False` keeps Gate B
+        and every structural `guard:` invariant but leaves the runtime `call:` probes out,
+        so the sandbox is never loaded: a historical blob has no sibling modules to import,
+        and every structural catch (a guard dropped, flipped or neutered, a handler widened,
+        a body stubbed, a decorator stripped) needs no execution."""
+        if not self._ephemeral:
+            return StateKernel(ephemeral=True).judge_transition(path, before, after, allow_deletion=allow_deletion,
+                                                                root=root, run_probes=run_probes)
+        rel = str(path).replace("\\", "/")
+        node_id = _okf.strip_suffix(rel).replace("/", ".") or "module"
+        root_path = Path(root).resolve() if root else Path.cwd()
+        self._point_cache(root_path)
+        before, after = before.replace("\r\n", "\n"), after.replace("\r\n", "\n")
+        try:
+            info = _okf.analyze(node_id, rel, before, _okf.module_map({node_id: rel}), mine=run_probes)
+            if not run_probes and _okf.lang_module(rel) is None:
+                import dataclasses
+
+                # Every guard clause of the held text as a structural invariant — the leading
+                # guards a runtime probe would normally own included — plus the hand-written
+                # lines that need no loaded namespace. Nothing is mined from the staged text.
+                # (A TypeScript / Go / Rust / Java module's mined guards are structural already.)
+                guards = self.structural_guards(rel, before, root=root_path)
+                manual = [i for i in info.invariants if not i.startswith("call:") and re.search(r"\bns\b", i) is None]
+                info = dataclasses.replace(info, invariants=manual + guards, mined_invariants=guards)
+        except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+            return CommitVerdict(accepted=False, gate="A", error=_as_mechanical(exc, node_id), attestation=None, dirtied=[])
+        s = _Session(session_id=f"sk-judge-{uuid.uuid4().hex[:12]}", root=root_path, nodes={node_id: _Node(info=info)},
+                     structural=not run_probes)
+        self._sessions[s.session_id] = s
+        try:
+            return self.commit(s.session_id, node_id, source=after, allow_deletion=allow_deletion, dry_run=True)
+        finally:
+            self._sessions.pop(s.session_id, None)
+
+    def structural_guards(self, path: str | Path, source: str, *, root: str | Path | None = None) -> list[str]:
+        """Every guard clause of one module's text as a `guard:` invariant, the leading guards
+        a runtime probe would own included — the contract a structural judgement holds."""
+        rel = str(path).replace("\\", "/")
+        self._point_cache(Path(root).resolve() if root else Path.cwd())
+        if _okf.lang_module(rel) is not None:
+            return [i for i in self.mined_invariants(rel, source, root=root) if i.startswith("guard:")]
+        text = source.replace("\r\n", "\n")
+        key = (rel, hash(text), len(text))
+        hit = _STRUCTURAL_CACHE.get(key)
+        if hit is None:
+            try:
+                hit = tuple(_okf.mine_structural_guards(_okf.parse_cached(text), covered=set()))
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                hit = ()
+            _okf._lru_put(_STRUCTURAL_CACHE, key, hit, 256)
+        return list(hit)
+
+    def mined_invariants(self, path: str | Path, source: str, *, root: str | Path | None = None) -> list[str]:
+        """The invariants the kernel mines from one module's text alone (guards, probes,
+        structural guards) — what a report shows as the before / after contract."""
+        rel = str(path).replace("\\", "/")
+        node_id = _okf.strip_suffix(rel).replace("/", ".") or "module"
+        self._point_cache(Path(root).resolve() if root else Path.cwd())
+        try:
+            return list(_okf.analyze(node_id, rel, source.replace("\r\n", "\n"), _okf.module_map({node_id: rel})).mined_invariants)
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            return []
+
     def index_mode(self, session_id: str) -> str:
         """`"lazy"` when the tree was indexed by path, hash and import edges (every discovered
         file is a node, analysed on first use), `"eager"` when every module was analysed at
@@ -542,7 +617,8 @@ class StateKernel:
             return self._reject(s, node, "A", _as_mechanical(exc, node_id), dry_run=dry_run)
 
         staged_tree = tree if isinstance(tree, ast.Module) else None
-        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s), previous=node.info, tree=staged_tree)
+        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s), previous=node.info, tree=staged_tree,
+                                   mine=not s.structural)
         try:
             _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion, nodes=s.nodes,
                           trees=_shared_trees(node.info.source, tree))

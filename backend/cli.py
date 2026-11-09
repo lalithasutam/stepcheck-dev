@@ -424,10 +424,48 @@ def main(argv: list[str] | None = None) -> int:
     hk.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
     hk.set_defaults(fn=cmd_hooks)
 
-    cn = sub.add_parser("connect", help="zero-touch setup: install Claude Code hooks, wire .mcp.json, and initialize the project session")
+    cn = sub.add_parser("connect", help="zero-touch setup: install Claude Code hooks, wire .mcp.json (and .cursor/mcp.json), "
+                                        "install the git pre-commit gate, and initialize the project session")
     cn.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
     cn.add_argument("--url", default="http://127.0.0.1:8420/v1/step/hook", help="gateway hook endpoint")
+    cn.add_argument("--no-git-hook", action="store_true", help="do not install the .git/hooks/pre-commit gate")
+    cn.add_argument("--no-cursor", action="store_true", help="do not write .cursor/mcp.json even when .cursor/ exists")
+    cn.add_argument("--cursor", action="store_true", help="write .cursor/mcp.json even when .cursor/ does not exist yet")
+    cn.add_argument("--no-retro", action="store_true", help="skip the retro teaser at the end")
     cn.set_defaults(fn=cmd_connect)
+
+    dc = sub.add_parser("disconnect", help="undo `connect`: remove the pre-commit gate (restoring a chained hook), the Cursor and "
+                                           ".mcp.json entries and the Claude Code hooks; sessions and frames are kept")
+    dc.add_argument("path", nargs="?", default=".", help="project root (default: current directory)")
+    dc.set_defaults(fn=cmd_disconnect)
+
+    rt = sub.add_parser("retro", help="the git time machine: judge the last N commits through Gates B/C and list the silent "
+                                      "regressions (guard drops, flips, neuters, stubs, stripped decorators) they landed")
+    rt.add_argument("path", nargs="?", default=".", help="a path inside the repository (default: current directory)")
+    rt.add_argument("--commits", type=int, default=50, help="how many non-merge commits to walk (default 50)")
+    rt.add_argument("--all", action="store_true", help="include test files and list structural removals (Tier 2) in detail")
+    rt.add_argument("--probes", action="store_true", help="also run the runtime call: probes in the sandbox (default: structural "
+                                                          "gates only — historical blobs have no sibling modules to import)")
+    rt.add_argument("--jobs", type=int, default=None, help="worker processes judging transitions side by side (default: cores up to 8; 1 = in-process)")
+    rt.add_argument("--json", action="store_true", help="machine-readable report")
+    rt.set_defaults(fn=lambda a: __import__("retro").cmd_retro(a))
+
+    df = sub.add_parser("diff", help="judge the working tree (or --staged, or --base <ref> for a PR) against its baseline "
+                                     "through Gates A/B/C; exit 1 on a silent regression")
+    df.add_argument("path", nargs="?", default=".", help="a path inside the repository (default: current directory)")
+    df.add_argument("--base", default=None, help="git ref to compare against (default HEAD; `origin/main...HEAD` uses the merge base)")
+    df.add_argument("--staged", action="store_true", help="judge the index instead of the working tree (what `git commit` would land)")
+    df.add_argument("--markdown", action="store_true", help="a PR-comment table")
+    df.add_argument("--json", action="store_true", help="machine-readable report")
+    df.set_defaults(fn=lambda a: __import__("retro").cmd_diff(a))
+
+    al = sub.add_parser("allow", help='declare an intended contract change for the next edit of a file: '
+                                      '`stepcheck allow <file> [symbol] --reason "<why>"` (consumed by one accepted edit)')
+    al.add_argument("file", help="the tracked source file about to be edited")
+    al.add_argument("symbol", nargs="?", default=None, help="restrict the allowance to one symbol (def / class / Class.method)")
+    al.add_argument("--reason", required=True, help="why the guard or symbol may go (recorded in .stepcheck/declared.jsonl)")
+    al.add_argument("--root", default=None, help="project root (default: the nearest .stepcheck/ or .git/ ancestor)")
+    al.set_defaults(fn=lambda a: __import__("declared").cmd_allow(a))
 
     cp = sub.add_parser("compliance", help="export the session's attestation as a standard in-toto Statement v1 "
                                          "(attestation.intoto.json: subject = every tracked file + sha256, predicate = "
@@ -684,6 +722,7 @@ its start, a daemon is restarted so the session never runs stale kernel code, an
 a gateway started by hand is left running with a note asking for a restart."""
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -916,7 +955,9 @@ def main() -> int:
         out = json.loads(_post(json.dumps(event).encode("utf-8")) or b"{}")
     except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout
         offline = f"gateway offline ({exc.__class__.__name__})"
-        if event.get("hook_event_name", "PreToolUse") == "PreToolUse" and event.get("tool_name") not in EDIT_TOOLS:
+        command = str((event.get("tool_input") or {}).get("command") or "") if event.get("tool_name") == "Bash" else ""
+        sovereign = bool(re.search(r"(?:^|[\\s;&|(`])stepcheck(?:\\.exe)?\\s+allow\\b|declared\\.jsonl", command, re.I))
+        if event.get("hook_event_name", "PreToolUse") == "PreToolUse" and event.get("tool_name") not in EDIT_TOOLS and not sovereign:
             # Read: nothing to gate, so leave before importing anything heavier — the
             # offline fast path. Autostart, when on, still kicks the daemon so the
             # next call is answered warm.
@@ -968,7 +1009,34 @@ def cmd_connect(args: argparse.Namespace) -> int:
     sid = StateKernel().init_session(root)
     print(f"  .mcp.json: wired stepcheck -> {base_url}/mcp/")
     print(f"  session  : initialized {sid} on {root}")
+    import wiring
+
+    if not getattr(args, "no_git_hook", False):
+        print(f"  git hook : {wiring.install_pre_commit(root)}")
+    if not getattr(args, "no_cursor", False) and (getattr(args, "cursor", False) or (root / ".cursor").is_dir()):
+        print(f"  .cursor  : {wiring.write_cursor_mcp(root, base_url)}")
+    if not getattr(args, "no_retro", False):
+        import retro
+
+        line = retro.teaser(root)
+        if line:
+            print(line)
     return rc
+
+
+def cmd_disconnect(args: argparse.Namespace) -> int:
+    """`stepcheck disconnect [path]`: remove what `connect` wired — the pre-commit gate
+    (a chained user hook is restored), the Cursor and `.mcp.json` server entries and the
+    Claude Code hooks. Sessions, frames and attestations under `.stepcheck/` are kept."""
+    import wiring
+
+    root = Path(args.path).resolve()
+    print(f"stepcheck disconnect — {root}")
+    print(f"  git hook : {wiring.remove_pre_commit(root)}")
+    print(f"  .cursor  : {wiring.remove_cursor_mcp(root)}")
+    print(f"  .mcp.json: {wiring.remove_mcp_json(root)}")
+    print(f"  .claude  : {wiring.remove_claude_hooks(root)}")
+    return 0
 
 
 def cmd_hooks(args: argparse.Namespace) -> int:
@@ -1010,7 +1078,7 @@ def cmd_hooks(args: argparse.Namespace) -> int:
     # SessionStart warms (or reloads a stale) gateway: a cold start or a restart
     # takes longer than a per-tool decision, hence its larger timeout.
     for event, matcher, timeout in (("SessionStart", None, 30),
-                                    ("PreToolUse", "Read|Edit|Write|MultiEdit|NotebookEdit", 10),
+                                    ("PreToolUse", "Read|Edit|Write|MultiEdit|NotebookEdit|Bash", 10),
                                     ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit|Bash", 10), ("Stop", None, 10)):
         entries = hooks_cfg.setdefault(event, [])
         ours = [e for e in entries if any(h.get("command") == command for h in e.get("hooks", []))]

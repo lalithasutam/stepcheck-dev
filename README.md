@@ -61,7 +61,7 @@ key. Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 363 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/tests/` | 376 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.4% tokens saved) + review generator |
@@ -88,7 +88,15 @@ stepcheck hooks             # .claude/hooks + settings wiring: Read over thresho
 stepcheck compliance        # attestation.intoto.json (in-toto Statement v1: every tracked file + sha256, gate verdicts, Merkle root, DSSE envelopes) + DUC.json / DUA-E.json
 stepcheck ci . --report     # the headless gate plus a Markdown PR checklist: touched modules, re-verified callers, conserved symbols, in-toto digests
 stepcheck audit --card      # stepcheck-audit-card.svg + a copy-paste badge line; file names and session ids never appear
+stepcheck retro . --commits 50   # the git time machine: every commit's modified modules through Gates B/C — guard drops, flips, neuters, stubbed bodies, stripped decorators; structural by default and parallel (--probes: runtime call: checks too; --all: structural removals + test files; --json)
+stepcheck diff . [--staged | --base origin/main...HEAD] [--markdown]   # the working tree, the index or a PR against its baseline; exit 1 on a silent regression
+stepcheck allow <file> [symbol] --reason "..."   # declare one intended guard / symbol removal for the next native-tool edit (.stepcheck/declared.jsonl; consumed once)
+stepcheck connect .         # hooks + .mcp.json + session + a git pre-commit gate (`diff --staged`, chains your existing hook) + .cursor/mcp.json when .cursor/ exists; `disconnect` undoes it
 ```
+
+`action.yml` is a composite GitHub Action: on a pull request it runs `stepcheck diff --base <base sha> --markdown`, writes the
+table to the job summary and fails the check on a silent regression (`fail-on-catch: 'false'` to report only); on a push it
+runs `stepcheck ci`.
 
 ## Door 1: accordion compaction and tier routing
 
