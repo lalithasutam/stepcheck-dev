@@ -1,89 +1,133 @@
 {
- "before": "slice35",
- "after": "slice36",
- "before_kernel": "4912e62",
- "after_kernel": "4912e62",
- "after_dirty": true,
+ "labels": [
+  "slice35",
+  "slice36",
+  "slice37"
+ ],
+ "columns": [
+  {
+   "label": "slice35",
+   "kernel_commit": "4912e62",
+   "backend_dirty": true
+  },
+  {
+   "label": "slice36",
+   "kernel_commit": "4912e62",
+   "backend_dirty": true
+  },
+  {
+   "label": "slice37",
+   "kernel_commit": "3380919",
+   "backend_dirty": true
+  }
+ ],
  "table": [
   [
    "Monolith files (15 files, 72,904 LOC): dry-run commit, one function edited",
    "p50 1216.1 / p95 1850.1 / max 1929.7 ms; <25 ms 0.0%, <50 ms 0.0%",
-   "p50 453.1 / p95 873.0 / max 921.4 ms; <25 ms 0.0%, <50 ms 0.0%"
+   "p50 453.1 / p95 873.0 / max 921.4 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 38.7 / p95 133.7 / max 432.8 ms; <25 ms 5.8%, <50 ms 75.4%"
   ],
   [
    "Monolith files: landed commit",
    "p50 1285.4 / p95 1979.1 / max 2034.1 ms; <25 ms 0.0%, <50 ms 0.0%",
-   "p50 630.5 / p95 813.6 / max 1043.5 ms; <25 ms 0.0%, <50 ms 0.0%"
+   "p50 630.5 / p95 813.6 / max 1043.5 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 183.3 / p95 223.0 / max 325.2 ms; <25 ms 0.0%, <50 ms 0.0%"
   ],
   [
    "Monolith files: init_session",
    "p50 396.1 / p95 559.1 / max 594.6 ms; <25 ms 0.0%, <50 ms 0.0%",
-   "p50 473.4 / p95 589.9 / max 628.8 ms; <25 ms 0.0%, <50 ms 0.0%"
+   "p50 473.4 / p95 589.9 / max 628.8 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 368.0 / p95 572.1 / max 590.9 ms; <25 ms 0.0%, <50 ms 0.0%"
   ],
   [
    "Monolith files: focused checkout",
    "p50 255.1 / p95 398.4 / max 404.9 ms; <25 ms 0.0%, <50 ms 0.0%",
-   "p50 449.1 / p95 615.4 / max 626.1 ms; <25 ms 0.0%, <50 ms 6.7%"
+   "p50 449.1 / p95 615.4 / max 626.1 ms; <25 ms 0.0%, <50 ms 6.7%",
+   "p50 273.2 / p95 388.9 / max 552.8 ms; <25 ms 0.0%, <50 ms 6.7%"
   ],
   [
-   "django package (881 files, 161,663 LOC): cold init_session",
+   "django package (930 files, 170,643 LOC): cold init_session",
    "135.9 s (6.8 files/s)",
-   "89.9 s (9.8 files/s)"
+   "89.9 s (9.8 files/s)",
+   "1.1 s (793.2 files/s)"
   ],
   [
-   "django package: peak memory (tracemalloc / RSS)",
-   "58.9 MB / None MB",
-   "58.0 MB / None MB"
+   "django package: peak memory (tracemalloc / RSS) / session file",
+   "58.9 MB / None MB / 7.7 MB",
+   "58.0 MB / None MB / 7.3 MB",
+   "16.3 MB / None MB / 0.3 MB"
   ],
   [
    "django package: in-process PreToolUse Edit hook on db/models/sql/query.py",
    "p50 898.3 / p95 1100.1 / max 1100.1 ms; <25 ms 0.0%, <50 ms 0.0%",
-   "p50 355.7 / p95 444.3 / max 444.3 ms; <25 ms 0.0%, <50 ms 0.0%"
+   "p50 355.7 / p95 444.3 / max 444.3 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 17.6 / p95 234.4 / max 234.4 ms; <25 ms 80.0%, <50 ms 80.0%"
   ],
   [
    "django package: PreToolUse Read hook",
    "p50 3.2 / p95 97.3 / max 97.3 ms; <25 ms 66.7%, <50 ms 66.7%",
-   "p50 4.2 / p95 128.1 / max 128.1 ms; <25 ms 66.7%, <50 ms 66.7%"
+   "p50 4.2 / p95 128.1 / max 128.1 ms; <25 ms 66.7%, <50 ms 66.7%",
+   "p50 3.2 / p95 1035.1 / max 1035.1 ms; <25 ms 66.7%, <50 ms 66.7%"
   ],
   [
-   "django package: fresh-process session rehydrate",
+   "django package: fresh-process session rehydrate + locate",
    "138.0 ms",
-   "128.2 ms"
+   "128.2 ms",
+   "67.6 ms"
   ],
   [
    "django package: stepcheck ci cold / warm",
    "107.2 s / 91.0 s, exit 1",
-   "55.9 s / 46.5 s, exit 1"
+   "55.9 s / 46.5 s, exit 1",
+   "5.2 s / 6.1 s, exit 0"
   ],
   [
-   "full django tree (2665 files, 499,624 LOC): cold init_session",
+   "full django tree (2980 files, 537,414 LOC): cold init_session",
    "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
-   "231.4 s (11.5 files/s)"
+   "231.4 s (11.5 files/s)",
+   "2.8 s (1016.5 files/s)"
   ],
   [
    "full django tree: peak memory / session file",
    "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
-   "242.0 MB / 22.1 MB"
+   "242.0 MB / 22.1 MB",
+   "57.8 MB / 1.0 MB"
   ],
   [
    "full django tree: PreToolUse Edit hook",
    "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
-   "p50 625.2 / p95 700.7 / max 700.7 ms; <25 ms 0.0%, <50 ms 0.0%"
+   "p50 625.2 / p95 700.7 / max 700.7 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 24.0 / p95 341.3 / max 341.3 ms; <25 ms 60.0%, <50 ms 80.0%"
+  ],
+  [
+   "full django tree: fresh-process session rehydrate + locate",
+   "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
+   "435.7 ms",
+   "85.1 ms"
   ],
   [
    "full django tree: stepcheck ci cold / warm",
    "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
-   "9.7 s / 9.8 s, exit 1"
+   "9.7 s / 9.8 s, exit 1",
+   "14.7 s / 14.5 s, exit 1"
   ],
   [
    "Noise tree (migrations, _pb2, .min.js, .d.ts, vendor, dist, build, .gitignored)",
    "7 noise files tracked of 16 (2 gitignored), init 3237.2 ms",
-   "0 noise files tracked of 16 (0 gitignored), init 104.9 ms"
+   "0 noise files tracked of 16 (0 gitignored), init 104.9 ms",
+   "0 noise files tracked of 16 (0 gitignored), init 110.0 ms"
   ],
   [
    "Resilience",
    "nesting_120: crash; nesting_400: crash; circular+*: ok; BOM/CRLF: ok",
+   "nesting_120: untracked: past the parser's limits, index unaffected; nesting_400: untracked: past the parser's limits, index unaffected; circular+*: ok; BOM/CRLF: ok",
    "nesting_120: untracked: past the parser's limits, index unaffected; nesting_400: untracked: past the parser's limits, index unaffected; circular+*: ok; BOM/CRLF: ok"
   ]
- ]
+ ],
+ "before": "slice35",
+ "after": "slice37",
+ "before_kernel": "4912e62",
+ "after_kernel": "3380919",
+ "after_dirty": true
 }

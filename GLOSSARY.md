@@ -38,6 +38,9 @@ directory). A fresh `StateKernel` (a gateway restart) rehydrates a known `sessio
 an unknown or malformed id is a `KeyError` (404 at Seam 2). `StateKernel(ephemeral=True)` is
 verification-only: gates, attestations and the graph work in memory, but no frame, session file,
 registry entry or tracked-file write-back is ever written — this is what `stepcheck ci` runs on.
+The session file is *slim*: a node whose latest attestation (or the file on disk) still holds its
+text is stored as its facts without the source; a lazy node (below) as its path, hash and import
+edges only. The text comes back through the **baseline** on first use.
 **Session refresh:** `refresh_sessions()` reconciles memory with disk — a session whose file was
 archived or deleted is evicted (its next use is the `KeyError` of an unknown id), and one whose file
 another process rewrote (newer `mtime_ns`, bytes not this process's own last write) is reloaded.
@@ -83,7 +86,11 @@ holds, in *segments*: a top-level def, a class shell (its `class` line, attribut
 classes) and each `Class.method`. Segments whose text did not change, and that name no changed
 symbol, keep their mined invariants; only the affected segments are re-mined (`guard:` clauses,
 `call:` probes, branch invariants). A change at the module level (imports, constants) is a full
-analysis again. Gate C follows the same **edit scope**: a runtime `call:` probe or a structural
+analysis again. A def or class nested in a module-level `try:` / `if sys.platform …:` / `with`
+block is not a segment but part of the remainder: its mined invariants are carried whenever the
+remainder is unchanged, and an edit to a symbol such a definition names makes the analysis full
+(the zero-trust audit of 2026-11-09 found these invariants dropped after an unrelated commit;
+`rest_symbols` closes it). Gate C follows the same **edit scope**: a runtime `call:` probe or a structural
 guard whose owning segment is outside the scope is untouched by definition and is not re-run,
 so the sandbox is never loaded for an edit that cannot reach a probe; hand-written invariants
 always run. `StateKernel.perf_stats()` counts what was mined, reused and skipped.
@@ -95,13 +102,43 @@ what depends on the rest of the project (dependencies, `call:<imported>` fingerp
 recomputed on every call. An ephemeral kernel (`stepcheck ci`) reads the cache but writes
 nothing under the tree.
 
+**Stitched commit** — A commit whose edit sits inside one top-level def, class or method parses
+that block alone (dedented) and splices it, by position, into a shallow copy of the tree the
+session holds; Gate A, the analysis, Gate B and Gate C all read that one tree, so the whole
+module is parsed zero times for a one-function edit (`perf_stats()["stitched"]` /
+`["full_parses"]`). A syntax error inside the block is the edit's own and a Gate A verdict.
+
+**Lazy node / baseline** — A tree above `LAZY_THRESHOLD` files (200; `STEPCHECK_LAZY_THRESHOLD`
+overrides) or above `LAZY_BYTES` of tracked source (512 KB; `STEPCHECK_LAZY_BYTES`) is indexed
+as paths, byte hashes and import edges (a line scan, no parse; `index_mode()` says which); a module
+is analysed the first time a checkout, a commit, a dependent's gate or `locate` needs it
+(`graph()` lists an unanalysed node with `materialized: false` and empty facts). A node is
+always judged against its **baseline** — the text the session holds — never against the bytes a
+shell just wrote: the baseline is the file on disk while its hash is the one the session saw,
+else the attested frame, the kept blob (`.stepcheck/cache/blobs/<sha256>`, kept at indexing for
+files not recoverable from git) or `git show <head>:<path>` for the commit the tree was at when
+the session opened. When none has it, the disk bytes become the baseline and a `baseline_lost`
+event is recorded.
+
 **File discovery** — `tracked_files` skips generated and vendored code by pattern
-(`migrations/`, `*_pb2.py`, `*_pb2_grpc.py`, `*.min.js`, `*.d.ts`, `*.generated.*`, `vendor/`,
-`dist/`, `build/`, `.next/`, `target/`, `node_modules/`) and, inside a git repository, everything
-`.gitignore` hides (`git ls-files --cached --others --exclude-standard`). A file the running
+(`*_pb2.py`, `*_pb2_grpc.py`, `*.min.js`, `*.d.ts`, `*.generated.*`, `vendor/`, `dist/`, `build/`,
+`.next/`, `target/`, `node_modules/`), a `migrations/` directory that holds numbered
+`0001_initial.py`-style files (Django's own `db/migrations/` framework package has none and
+stays tracked) and, inside a git repository — the root or any subdirectory of one — everything
+`.gitignore` hides (`git ls-files --cached --others --exclude-standard`, whose listing is also
+the walk: one existence check per listed file instead of a stat per entry). A file the running
 Python cannot parse (a newer grammar such as PEP 695 `type X = …`, or more than the parser's 100
 indentation levels) is left untracked instead of aborting the index; growing a tracked file past
 those limits is a Gate A verdict.
+
+**Root package** — When the project root itself holds an `__init__.py` (a session opened on
+`django/`, the package, rather than on the repository), the root is the package named after its
+directory: `http/__init__.py` imports as `django.http` — so `from http import cookies` is the
+standard library's `http`, not a project module — and `from django import forms` reaches
+`forms/__init__.py` rather than a file that happens to be named `django.py`. The root-relative
+names stay as aliases (the package directory may sit on `sys.path` too, as `backend/` does
+here), except where the standard library owns the top-level name. `_okf.set_root_package` is
+pointed per session like the analysis cache.
 
 **Compliance Statement** — `stepcheck compliance` leads with `attestation.intoto.json`: a standard
 in-toto Statement v1 (`_type` `https://in-toto.io/Statement/v1`, `predicateType`
@@ -145,7 +182,10 @@ the payload is the bare source, exactly `raw` tokens (`CheckoutPayload.pragma=Tr
 keep their signatures in `dependency_signatures`). A partial focus is never expanded to the whole
 file: it stays sliced even when its stubs, cone and interfaces outweigh the few lines they hide.
 The full frame (`focus=None`) is never floored, and a frame at or over the 4,000-token budget
-takes the budget ladder instead.
+takes the budget ladder instead. A focused frame still over budget after the sibling-method,
+dependency-stub and frontmatter rungs takes the first skeleton rung too — unfocused *private*
+functions lose their parameters (name-only stubs), the focused symbol, every public signature
+and the import block stay — so the cap holds for a focused view of a 100-symbol module.
 
 **Focus / AST skeleton** — `checkout(…, focus=[names])` serves the named top-level defs
 verbatim (comments included) and every other def/class as decorators + signature + docstring +
@@ -161,6 +201,22 @@ module. A patch that cannot fold is a `MechanicalError` at Gate A.
 `error` (a `GateError` or `None`), `attestation` (envelope dict when accepted), `dirtied[]`
 (node_ids transitioned to `DIRTY_OMISSION_RISK`), `reverified[]` (dependents re-checked in memory
 and re-attested instead — see OmissionRisk).
+
+**verify_node** — `StateKernel.verify_node(session_id, node_id)`: the read-only check `stepcheck
+ci` runs on a module nothing attests. Gate A on the bytes the node holds, then the invariants on
+record executed through Gate C — every invariant of an analysed node, the hand-written
+`# okf-invariant:` lines alone of a lazy one; nothing is mined for the check (a module's own
+guards hold against itself by construction), nothing is mutated, no event is recorded, the
+verdict carries no attestation. `stepcheck ci` parses each unattested module once: its parse
+phase keeps what Gate A and the import contracts need of the module (bound top-level names,
+star imports, import statements, hand-written invariants — `_gates.precheck`), so the gates
+phase needs no second tree, and a module with nothing on record never reaches Gate C. In the
+`ci` table a module whose latest attestation still matches its bytes, and whose dependencies'
+do too, is **ATTESTED** (reported from the frame, not re-committed); one whose runtime probes
+could not load because a *third-party* package is
+absent from the interpreter is **ENV** (`LogicalError.subtype == "ENVIRONMENT"`: a rejection in a
+session, reported apart and not a failure in `ci`); a project module that is missing is still a
+Gate A `FAIL`.
 
 **PreservedSymbol** — A named AST element (decorator usage, guard clause marker, internal call,
 exported def) listed in a frame's `preserved_symbols[]`. Silently dropping one is an

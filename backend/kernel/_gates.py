@@ -229,7 +229,7 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
     staged_symbols = set(staged_info.preserved_symbols)
     dropped = [s for s in node.info.preserved_symbols if s not in staged_symbols]
     if dropped and str(node.info.path).endswith((".py", ".pyi")):
-        dependents = {nid: n.info.source for nid, n in (nodes or {}).items() if node.info.node_id in n.info.deps}
+        dependents = {nid: n.source for nid, n in (nodes or {}).items() if node.info.node_id in n.deps}
         dropped = [s for s in dropped if not _dead_symbol(s, new_source, staged_info, dependents)]
     if dropped:
         named = [s for s in dropped if " on " in s]
@@ -335,8 +335,11 @@ def unchanged_since_lock(node, source: str) -> bool:
     return node.disk_sha256 == attested
 
 
-def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
-    """Mechanical & locked protection. Returns the parsed tree on pass.
+def gate_a(node_id: str, locked: bool, source: str, nodes, tree: "ast.Module | None" = None,
+           modules: dict[str, str] | None = None) -> "ast.Module":
+    """Mechanical & locked protection. Returns the parsed tree on pass (`tree`: the
+    module already parsed — or stitched from the held tree — so it is not parsed again;
+    `modules`: the project's import map when the caller holds it).
 
     Raises kernel.MechanicalError on: locked mutation, syntax error, or a name a
     dependent imports from this module (absolute or relative, through packages)
@@ -348,7 +351,7 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
 
     if locked and node_id in nodes and unchanged_since_lock(nodes[node_id], source):
         locked = False  # re-verification of the locked bytes, not a mutation
-    _path = next((n.info.path for nid, n in nodes.items() if nid == node_id), f"{node_id}.py")
+    _path = next((n.path for nid, n in nodes.items() if nid == node_id), f"{node_id}.py")
     _mod = _okf_.lang_module(_path)
     if _mod is not None:
         return _mod.gate_a(node_id, locked, source, nodes)
@@ -358,13 +361,34 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
         raise MechanicalError(
             f"node '{node_id}' is LOCKED — mutations are rejected at Gate A"
         )
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        raise MechanicalError(f"invalid AST syntax in '{node_id}': {exc.msg} (line {exc.lineno})")
+    light = _okf.light_facts(_path, source) if tree is None else None
+    if light is not None:
+        # Parse-once path (`stepcheck ci`): the parse phase already bound this module's names
+        # and read every dependent's imports, so the contract is checked without a tree.
+        bound, star_imported, _statements, _manual = light
+        if "__getattr__" in bound or star_imported:
+            return None
+        light_modules = modules if modules is not None else _okf.module_map({nid: n.path for nid, n in nodes.items()})
+        for dep_id, dep_node in nodes.items():
+            if dep_id == node_id or node_id not in dep_node.deps:
+                continue
+            needed = _okf.resolve_imports(dep_id, dep_node.path, dep_node.source, light_modules).get(node_id, set())
+            absent = sorted(needed - bound)
+            if absent:
+                raise MechanicalError(
+                    f"export '{absent[0]}' of '{node_id}' is required by dependent "
+                    f"'{dep_id}' and is missing from the staged source"
+                )
+        return None
+    if tree is None:
+        try:
+            tree = _okf.parse_cached(source)
+        except SyntaxError as exc:
+            raise MechanicalError(f"invalid AST syntax in '{node_id}': {exc.msg} (line {exc.lineno})")
 
-    paths = {nid: n.info.path for nid, n in nodes.items()}
-    modules = _okf.module_map(paths)
+    if modules is None:
+        paths = {nid: n.path for nid, n in nodes.items()}
+        modules = _okf.module_map(paths)
     exports, _preserved = _okf.top_level_facts(tree)  # the exports alone: no mining here
     bound = export_names(exports) | _bound_names(tree)
     if "__getattr__" in bound:
@@ -372,10 +396,10 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     if _star_imports(tree):
         return tree  # `from … import *` at the top level can serve any name a dependent imports
     for dep_id, dep_node in nodes.items():
-        if dep_id == node_id or node_id not in dep_node.info.deps:
+        if dep_id == node_id or node_id not in dep_node.deps:
             continue
         required = _okf.resolve_imports(
-            dep_id, dep_node.info.path, dep_node.info.source, modules
+            dep_id, dep_node.path, dep_node.source, modules
         ).get(node_id, set())
         missing = sorted(required - bound)
         if missing:
@@ -384,6 +408,32 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
                 f"'{dep_id}' and is missing from the staged source"
             )
     return tree
+
+
+def precheck(path: str, source: str, tree: "ast.Module") -> None:
+    """Remember, from the one parse `stepcheck ci` makes of a module, what Gate A and
+    `_okf.resolve_imports` need of it (bound top-level names, star imports, import
+    statements, hand-written invariants), so no second parse follows."""
+    from . import _okf
+
+    exports, _preserved = _okf.top_level_facts(tree)
+    _okf.remember_light_facts(path, source, (export_names(exports) | _bound_names(tree), _star_imports(tree),
+                                             _okf.import_statements(tree), _okf.harvest_invariants(source)))
+
+
+def _load_failure_subtype(exc: BaseException, project_paths, project_sources) -> str | None:
+    """`"ENVIRONMENT"` when loading the staged module failed on a package this interpreter
+    does not have — the probes cannot run here, which says nothing about the staged code
+    (still a rejection; `stepcheck ci` reports it apart) — else None. A module of the
+    project itself that is missing is the staged code's problem."""
+    from . import _okf
+
+    if not isinstance(exc, ModuleNotFoundError) or not exc.name:
+        return None
+    top = exc.name.split(".")[0]
+    owned = {m.split(".")[0] for m in _okf.module_map(dict(project_paths or {}))}
+    owned |= {str(nid).split(".")[0] for nid in (project_sources or {})}
+    return None if top in owned else "ENVIRONMENT"
 
 
 def _star_imports(tree: "ast.Module") -> bool:
@@ -525,6 +575,7 @@ def gate_c(
     mined: list[str] | None = None,
     project_paths: dict[str, str] | None = None,
     previous_source: str | None = None,
+    tree: "ast.Module | None" = None,
 ) -> None:
     """Logical micro-invariants: every standing frame invariant must hold.
 
@@ -561,11 +612,16 @@ def gate_c(
 
     guard_invariants = [inv for inv in invariants if inv.startswith("guard:")]
     invariants = [inv for inv in invariants if not inv.startswith("guard:")]
+    if not invariants and not guard_invariants:
+        return  # nothing on record to hold: no parse, no sandbox
     path = (project_paths or {}).get(node_id, f"{node_id}.py")
-    tree = scope = None
+    scope = None
     if _okf.lang_module(path) is None:
-        tree = ast.parse(staged_source)
+        if tree is None:
+            tree = ast.parse(staged_source)
         scope, _order = _okf.edit_scope(previous_source, staged_source, tree)  # None: everything is in scope
+    else:
+        tree = None
     if scope is not None:
         live = [inv for inv in invariants if (_okf.mined_owner(inv) is None) or _okf.in_scope(_okf.mined_owner(inv), scope)]
         PERF["gate_c_probes_skipped"] += len(invariants) - len(live)
@@ -597,7 +653,8 @@ def gate_c(
             )
         except Exception as exc:
             raise LogicalError(
-                f"staged module '{node_id}' failed to load for callable invariants: {exc!r}"
+                f"staged module '{node_id}' failed to load for callable invariants: {exc!r}",
+                subtype=_load_failure_subtype(exc, project_paths, project_sources),
             )
 
     for inv in invariants:

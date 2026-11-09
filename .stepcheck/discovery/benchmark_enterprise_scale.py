@@ -227,19 +227,26 @@ def stress_repo(repo: Path) -> dict:
             pass
     rss0 = rss_mb()
     k = StateKernel()
-    tracemalloc.start()
     t0 = time.perf_counter()
     try:
         sid = k.init_session(repo)
     except Exception as exc:  # noqa: BLE001 — the baseline may not survive the tree
-        tracemalloc.stop()
         return {"repo": str(repo), "tracked_files": len(files), "loc": loc,
                 "init_session_crash": f"{type(exc).__name__}: {str(exc)[:160]}", "seconds_before_crash": round(time.perf_counter() - t0, 1)}
     init_s = time.perf_counter() - t0
+    # Peak memory of an index, on a second (ephemeral) kernel: tracemalloc slows allocation-heavy
+    # code several-fold, so it never shares the wall clock above. (Slice 35/36 receipts measured
+    # both at once; their init seconds carry that overhead.)
+    tracemalloc.start()
+    try:
+        StateKernel(ephemeral=True).init_session(repo)
+    except Exception:  # noqa: BLE001
+        pass
     _cur, tm_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     nodes = k.graph(sid)["nodes"]
-    target = next((n for n in nodes if n["path"].replace("\\", "/") == "django/db/models/query.py"), None) or max(nodes, key=lambda n: len(n["source"]))
+    target = (next((n for n in nodes if n["path"].replace("\\", "/") in ("django/db/models/query.py", "db/models/query.py")), None)
+              or max(nodes, key=lambda n: (repo / n["path"]).stat().st_size))  # a lazy node carries no source in the graph
     path = repo / target["path"]
     text = path.read_text(encoding="utf-8")
     anchor = next((ln for ln in text.splitlines() if ln.strip().startswith("def ")), None)
@@ -264,11 +271,15 @@ def stress_repo(repo: Path) -> dict:
     rehydrate_ms = (time.perf_counter() - t0) * 1000
     ci = {}
     for run in ("cold", "warm"):
-        buf = io.StringIO()
+        # a fresh interpreter per run, as a CI runner would start it: the first run pays the
+        # cold OS file cache, the second does not; neither inherits this process's memo state
+        env = {**os.environ, "STEPCHECK_HOME": str(HOME), "STEPCHECK_HOOK_AUTOSTART": "0", "PYTHONUTF8": "1"}
         t0 = time.perf_counter()
-        with redirect_stdout(buf):
-            rc = cli.main(["ci", str(repo)])
-        ci[run] = {"seconds": round(time.perf_counter() - t0, 1), "exit": rc, "last_line": buf.getvalue().strip().splitlines()[-1][:160] if buf.getvalue().strip() else ""}
+        done = subprocess.run([sys.executable, "-m", "cli", "ci", str(repo)], cwd=BACKEND, env=env,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600)
+        text = done.stdout.strip()
+        ci[run] = {"seconds": round(time.perf_counter() - t0, 1), "exit": done.returncode,
+                   "last_line": text.splitlines()[-1][:160] if text else done.stderr.strip()[-160:], "fresh_process": True}
     return {"repo": str(repo), "tracked_files": len(files), "loc": loc, "nodes": len(nodes),
             "init_session_s": round(init_s, 1), "init_files_per_s": round(len(files) / init_s, 1) if init_s else None,
             "tracemalloc_peak_mb": round(tm_peak / 1e6, 1), "rss_before_mb": rss0, "rss_after_mb": rss_mb(), "peak_rss_mb": peak_rss_mb(),

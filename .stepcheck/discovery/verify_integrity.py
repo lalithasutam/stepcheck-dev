@@ -513,6 +513,7 @@ OPTIONAL = {
     "fuzzer": "overnight_fuzzer.json", "tiers": "commercial_tiers.json",
     "pytest_red_v031": "pytest_red_v031.json", "pytest_green_v031": "pytest_green_v031.json", "dogfood_v031": "dogfood_v031.json",
     "pytest_red_v031_hook": "pytest_red_v031_hook.json", "pytest_green_v031_hook": "pytest_green_v031_hook.json",
+    "enterprise_scale": "enterprise_scale.json", "nbs_audit": "not_benchmark_shaped_audit.json",
 }
 for _n in range(17, 26):
     for _lab in ("before", "after"):
@@ -521,6 +522,68 @@ CAMPAIGNS = [("17_20", "v0.2 production-readiness campaign (Slices 17–20)", (1
              ("21_25", "v0.3 overnight campaign (Slices 21–25)", (21, 22, 23, 24, 25), 9),
              ("v031", "Privacy fixes release (whole-token leak check, abbreviated audit paths)", (), 10),
              ("v031_hook", "Hook cost fix (a locked-node rejection no longer re-renders the project)", (), 11)]
+
+
+def build_enterprise(L: Ledger) -> dict[str, str]:
+    """Section 7: the Slice 35 -> 36 -> 37 enterprise-scale table (every cell is the receipt's
+    own string) and the zero-trust audit of those slices (fault sensitivity on monoliths,
+    bisimulation of the incremental path against a cold one, out-of-distribution trees)."""
+    d = L.data
+    if "enterprise_scale" not in d:
+        return {"md": "", "tex": ""}
+    g = L.get
+    es = d["enterprise_scale"]
+    n_labels = len(es["labels"])
+    heads = ["Measurement"] + [g("enterprise_scale", ["labels", i], "str") for i in range(n_labels)]
+    rows = [[g("enterprise_scale", ["table", i, j], "str") for j in range(len(row))] for i, row in enumerate(es["table"])]
+    md = ["## 7. Enterprise monorepo scaling (Slices 35 → 36 → 37)", "",
+          "Measured by `.stepcheck/discovery/benchmark_enterprise_scale.py` on the fifteen largest cached modules, "
+          "the `django/` package, the full django tree, a noise tree and the resilience cases; one column per slice "
+          "(receipt `receipts/enterprise_scale.json`). The last column's run times `init_session` without tracemalloc "
+          "attached; the earlier columns carry its overhead. `stepcheck ci` is timed twice in the benchmark process, "
+          "after the hook probes; a fresh process measures the package at the warm figure.", "",
+          md_table(heads, rows), ""]
+    tex = [tex_table(heads, rows, "Enterprise-scale measurements per slice (receipt strings).", "tab:enterprise")]
+    if "nbs_audit" in d:
+        a = d["nbs_audit"]
+        md += ["### 7.1 Zero-trust audit of Slices 35–37", "",
+               f"`audit_not_benchmark_shaped.py` (receipt `receipts/not_benchmark_shaped_audit.json`) diffed `backend/` against "
+               f"{g('nbs_audit', ['base'], 'str')}: {g('nbs_audit', ['1_static_purity', 'added_lines'])} added lines, "
+               f"{g('nbs_audit', ['1_static_purity', 'literal_hits_outside_tests'])} corpus-name literals outside tests, every one in a "
+               f"docstring or comment (the receipt lists each with its line). Every exclusion pattern and gate exemption is printed verbatim in the receipt.", ""]
+        f_rows = []
+        for kind in ("guard_drop", "relational_flip", "action_neuter", "stub_wipe"):
+            f_rows.append([kind.replace("_", " "),
+                           g("nbs_audit", ["2_fault_injection", "by_fault", kind, "blocked"]) + " / " + g("nbs_audit", ["2_fault_injection", "by_fault", kind, "n"]),
+                           g("nbs_audit", ["2_fault_injection", "by_fault", kind, "rate_pct"], "pct1"),
+                           g("nbs_audit", ["2_fault_injection", "by_fault", kind, "latency_when_blocking", "p50"], "ms1"),
+                           g("nbs_audit", ["2_fault_injection", "by_fault", kind, "latency_when_blocking", "p95"], "ms1")])
+        md += ["Fault injection in guarded functions at the top, middle and bottom of the monoliths, committed through the fast path "
+               f"(stitched on {g('nbs_audit', ['2_fault_injection', 'stitched_path_used_pct'], 'pct1')} of commits): "
+               f"{g('nbs_audit', ['2_fault_injection', 'blocked'])} of {g('nbs_audit', ['2_fault_injection', 'faults_tested'])} blocked "
+               f"({g('nbs_audit', ['2_fault_injection', 'catch_rate_pct'], 'pct1')}). The accepted faults are `return X` guards neutered to "
+               "`return None`: the early return survives, the value does not, and a structural guard invariant does not see values.", "",
+               md_table(["fault", "blocked", "rate", "p50 when blocking", "p95"], f_rows), "",
+               f"Bisimulation over {g('nbs_audit', ['3_bisimulation', 'edits'])} edits (benign function, method, multi-function and "
+               f"module-constant edits, every injected fault, SWE-bench gold patches): the fast path — stitched tree, segment reuse, "
+               f"memory and disk cache — against a cold path with every memo cleared and no stitched tree, against a from-scratch analysis "
+               f"of the edited text, and against Gate C with every probe in scope: "
+               f"{g('nbs_audit', ['3_bisimulation', 'divergences'])} divergence(s) in verdict, gate or invariant set.", ""]
+        o_rows = []
+        for name in a["4_ood_repositories"]:
+            r = a["4_ood_repositories"][name]
+            p = ["4_ood_repositories", name]
+            o_rows.append([name, g("nbs_audit", p + ["tracked_files"]), g("nbs_audit", p + ["loc"]),
+                           g("nbs_audit", p + ["init_s"], "f2") + " s", "exit " + g("nbs_audit", p + ["ci", "exit"]) + " in " + g("nbs_audit", p + ["ci", "seconds"], "f2") + " s",
+                           g("nbs_audit", p + ["hook_edit_ms", "p50"], "ms1") if r.get("hook_edit_ms") else "n/a",
+                           g("nbs_audit", p + ["fault_catch_rate_pct"], "pct1") if r.get("fault_catch_rate_pct") is not None else "n/a"])
+        md += ["Zero-shot trees never referenced by the benchmark (fastapi, tornado and scrapy as fresh shallow clones; the Martian "
+               "online tree, Python and Rust). The two `stepcheck ci` failures are real broken imports in those trees "
+               "(`maint/test/redbot/red_test.py` imports a symbol tornado removed; `etl/main.py` imports a name its target lacks).", "",
+               md_table(["tree", "files", "LOC", "cold init", "stepcheck ci", "hook Edit p50", "faults caught"], o_rows), ""]
+        tex.append(tex_table(["fault", "blocked", "rate", "p50", "p95"], f_rows, "Monolith fault injection through the incremental path.", "tab:faults"))
+        tex.append(tex_table(["tree", "files", "LOC", "init", "ci", "hook p50", "faults"], o_rows, "Zero-shot out-of-distribution trees.", "tab:ood"))
+    return {"md": "\n".join(md), "tex": "\n".join(tex)}
 
 
 def flatten(obj, prefix: list | None = None, depth: int = 0, out: list | None = None) -> list[tuple[list, float]]:
@@ -783,6 +846,11 @@ def main() -> int:
     docs["novel"] += "\n" + extra["md"]
     docs["paper_md"] += "\n## 5. v0.2 campaign results\n\n" + extra["md"].split("\n", 2)[2]
     docs["paper_tex"] = docs["paper_tex"].replace("\\section{Reproducibility}", extra["tex"] + "\n\\section{Reproducibility}")
+    ent = build_enterprise(L)
+    if ent["md"]:
+        docs["novel"] += "\n" + ent["md"]
+        docs["paper_md"] += "\n" + ent["md"]
+        docs["paper_tex"] = docs["paper_tex"].replace("\\section{Reproducibility}", ent["tex"] + "\n\\section{Reproducibility}")
     (HERE / "NOVEL_SOLUTIONS_AND_BENCHMARKS.md").write_text(docs["novel"], encoding="utf-8")
     PAPER.mkdir(parents=True, exist_ok=True)
     (PAPER / "STEPCHECK_PAPER.md").write_text(docs["paper_md"], encoding="utf-8")

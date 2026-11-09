@@ -228,7 +228,10 @@ class ContextCompactor:
 
         for level, label in ((1, "docstring lines, __init__ signatures and private function parameters"),
                              (2, "public function parameters and the import block")):
-            if tokens < budget or focus:
+            # A focused frame takes the first rung too (the focused symbol stays verbatim; the
+            # unfocused skeleton loses its docstring lines) but keeps its import block and
+            # public parameters: the budget is a hard cap on every payload.
+            if tokens < budget or (focus and level == 2):
                 break
             head, _body, tail = split(frame)
             frame = head + "```python\n" + _okf.skeleton(self.info.source, focus, elide_methods=True, compact=level, tree=self.tree) + "```" + tail

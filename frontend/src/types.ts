@@ -28,7 +28,10 @@ export interface GraphNode {
   invariants: string[];
   verified: number;
   attestation: Attestation | null;
-  source: string;
+  /** null for a lazily indexed node nothing has analysed yet (`materialized: false`) */
+  source: string | null;
+  materialized?: boolean;
+  disk_sha256?: string;
 }
 
 export interface Graph {

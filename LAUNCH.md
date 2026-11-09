@@ -6,7 +6,7 @@ Every number below is read from the repo as it stands, not rounded up:
 | --- | --- | --- |
 | Kernel + gateway + CLI + audit | ≈7,400 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
 | License | Apache-2.0 (`LICENSE`, `NOTICE`, `pyproject.toml`); the whole repo is the open core | `LICENSE` |
-| Tests | 346, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
+| Tests | 363, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
 | 50-turn benchmark | 120,815 raw → 14,048 compacted tokens, 88.4% saved, $0.3203 at $3.00/MTok | `benchmarks/results.json` |
 | Real-log audit | 131 Claude Code sessions, 7,612 assistant turns, 95 cache-cliff resumes re-writing 5,876,819 tokens, $15.87 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
@@ -98,7 +98,7 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 346 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 363 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
@@ -145,7 +145,7 @@ C logical (invariants over normalized src, the AST, and the exec-loaded module)
 
 6/ T25 is the one I like. Legit signature change on payments.charge. Accepted. But api and workers go amber (DIRTY_OMISSION_RISK) and finalize is refused until both are re-verified. The thing agents never do on their own.
 
-7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 346 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
+7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 363 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
 
 8/ Try the interactive replay, no install, works on your phone: https://lalithasutam.github.io/stepcheck-dev/
 Repo: https://github.com/lalithasutam/stepcheck-dev
@@ -201,7 +201,7 @@ Link straight to a moment with the hash: `#t20`, `#t25`, `#t35`, `#t36`. Regener
 ```bash
 cd stepcheck-dev && pip install -e . && (cd frontend && npm install && npm run build) && (cd backend && python -m pytest -q) && stepcheck up
 ```
-Expect `346 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
+Expect `363 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
 
 **2. Connect Claude Code (or Cursor) to the MCP server** (second terminal)
 ```bash

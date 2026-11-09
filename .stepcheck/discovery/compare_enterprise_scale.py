@@ -1,12 +1,13 @@
-"""Before (Slice 35) vs after (Slice 36) table from the enterprise_scale.*.json receipts;
-writes receipts/enterprise_scale.json (the combined receipt the paper cites).
-usage: compare_enterprise_scale.py [before_label] [after_label]"""
+"""Slice-by-slice table from the enterprise_scale.<label>.json receipts (one column per label,
+default Slice 35 / 36 / 37); writes receipts/enterprise_scale.json (the combined receipt the
+paper cites).
+usage: compare_enterprise_scale.py [label ...]        e.g. compare_enterprise_scale.py slice35 slice36 slice37"""
 import json
 import sys
 from pathlib import Path
 
 R = Path(__file__).resolve().parent / "receipts"
-before, after = (sys.argv[1] if len(sys.argv) > 1 else "slice35"), (sys.argv[2] if len(sys.argv) > 2 else "slice36")
+LABELS = sys.argv[1:] or ["slice35", "slice36", "slice37"]
 
 
 def load(label):
@@ -14,13 +15,13 @@ def load(label):
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
-B, A = load(before), load(after)
-Bf, Af = load(before + "-fullrepo"), load(after + "-fullrepo")
-rows = []
+RUNS = [load(lb) for lb in LABELS]
+FULL = [load(lb + "-fullrepo") for lb in LABELS]
 
 
 def ms(d):
-    return f"p50 {d['p50']} / p95 {d['p95']} / max {d['max']} ms; <25 ms {d['under_25ms_pct']}%, <50 ms {d['under_50ms_pct']}%" if d and d.get("n") else "—"
+    return (f"p50 {d['p50']} / p95 {d['p95']} / max {d['max']} ms; <25 ms {d['under_25ms_pct']}%, <50 ms {d['under_50ms_pct']}%"
+            if d and d.get("n") else "—")
 
 
 def mono(r, key):
@@ -40,37 +41,50 @@ def repo(r, fn):
         return "—"
 
 
-m = (B or {}).get("results", {}).get("1_monoliths") or (A or {}).get("results", {}).get("1_monoliths") or {}
-rows.append([f"Monolith files ({m.get('files')} files, {m.get('loc_total', 0):,} LOC): dry-run commit, one function edited", mono(B, "dry_run_commit"), mono(A, "dry_run_commit")])
-rows.append(["Monolith files: landed commit", mono(B, "landed_commit"), mono(A, "landed_commit")])
-rows.append(["Monolith files: init_session", mono(B, "init"), mono(A, "init")])
-rows.append(["Monolith files: focused checkout", mono(B, "checkout"), mono(A, "checkout")])
-x = (A or {}).get("results", {}).get("2_repository") or (B or {}).get("results", {}).get("2_repository") or {}
+def first(runs, section):
+    for r in runs:
+        v = (r or {}).get("results", {}).get(section)
+        if v:
+            return v
+    return {}
+
+
+def ci(x):
+    return f"{x['ci']['cold']['seconds']} s / {x['ci']['warm']['seconds']} s, exit {x['ci']['warm']['exit']}"
+
+
+rows = []
+m = first(RUNS, "1_monoliths")
+rows.append([f"Monolith files ({m.get('files')} files, {m.get('loc_total', 0):,} LOC): dry-run commit, one function edited",
+             *[mono(r, "dry_run_commit") for r in RUNS]])
+rows.append(["Monolith files: landed commit", *[mono(r, "landed_commit") for r in RUNS]])
+rows.append(["Monolith files: init_session", *[mono(r, "init") for r in RUNS]])
+rows.append(["Monolith files: focused checkout", *[mono(r, "checkout") for r in RUNS]])
+x = first(RUNS, "2_repository")
 rows.append([f"django package ({x.get('tracked_files')} files, {x.get('loc', 0):,} LOC): cold init_session",
-             repo(B, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)"), repo(A, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)")])
-rows.append(["django package: peak memory (tracemalloc / RSS)", repo(B, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['peak_rss_mb']} MB"),
-             repo(A, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['peak_rss_mb']} MB")])
-rows.append(["django package: in-process PreToolUse Edit hook on db/models/sql/query.py", repo(B, lambda x: ms(x["hook_edit_ms"])), repo(A, lambda x: ms(x["hook_edit_ms"]))])
-rows.append(["django package: PreToolUse Read hook", repo(B, lambda x: ms(x["hook_read_ms"])), repo(A, lambda x: ms(x["hook_read_ms"]))])
-rows.append(["django package: fresh-process session rehydrate", repo(B, lambda x: f"{x['fresh_process_rehydrate_ms']} ms"), repo(A, lambda x: f"{x['fresh_process_rehydrate_ms']} ms")])
-rows.append(["django package: stepcheck ci cold / warm", repo(B, lambda x: f"{x['ci']['cold']['seconds']} s / {x['ci']['warm']['seconds']} s, exit {x['ci']['warm']['exit']}"),
-             repo(A, lambda x: f"{x['ci']['cold']['seconds']} s / {x['ci']['warm']['seconds']} s, exit {x['ci']['warm']['exit']}")])
-xf = (Af or {}).get("results", {}).get("2_repository") or (Bf or {}).get("results", {}).get("2_repository") or {}
+             *[repo(r, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)") for r in RUNS]])
+rows.append(["django package: peak memory (tracemalloc / RSS) / session file",
+             *[repo(r, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['peak_rss_mb']} MB / {x.get('session_file_mb', '?')} MB") for r in RUNS]])
+rows.append(["django package: in-process PreToolUse Edit hook on db/models/sql/query.py", *[repo(r, lambda x: ms(x["hook_edit_ms"])) for r in RUNS]])
+rows.append(["django package: PreToolUse Read hook", *[repo(r, lambda x: ms(x["hook_read_ms"])) for r in RUNS]])
+rows.append(["django package: fresh-process session rehydrate + locate", *[repo(r, lambda x: f"{x['fresh_process_rehydrate_ms']} ms") for r in RUNS]])
+rows.append(["django package: stepcheck ci cold / warm", *[repo(r, ci) for r in RUNS]])
+xf = first(FULL, "2_repository")
 rows.append([f"full django tree ({xf.get('tracked_files')} files, {xf.get('loc', 0):,} LOC): cold init_session",
-             repo(Bf, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)"), repo(Af, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)")])
-rows.append(["full django tree: peak memory / session file", repo(Bf, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['session_file_mb']} MB"),
-             repo(Af, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['session_file_mb']} MB")])
-rows.append(["full django tree: PreToolUse Edit hook", repo(Bf, lambda x: ms(x["hook_edit_ms"])), repo(Af, lambda x: ms(x["hook_edit_ms"]))])
-rows.append(["full django tree: stepcheck ci cold / warm", repo(Bf, lambda x: f"{x['ci']['cold']['seconds']} s / {x['ci']['warm']['seconds']} s, exit {x['ci']['warm']['exit']}"),
-             repo(Af, lambda x: f"{x['ci']['cold']['seconds']} s / {x['ci']['warm']['seconds']} s, exit {x['ci']['warm']['exit']}")])
+             *[repo(r, lambda x: f"{x['init_session_s']} s ({x['init_files_per_s']} files/s)") for r in FULL]])
+rows.append(["full django tree: peak memory / session file", *[repo(r, lambda x: f"{x['tracemalloc_peak_mb']} MB / {x['session_file_mb']} MB") for r in FULL]])
+rows.append(["full django tree: PreToolUse Edit hook", *[repo(r, lambda x: ms(x["hook_edit_ms"])) for r in FULL]])
+rows.append(["full django tree: fresh-process session rehydrate + locate", *[repo(r, lambda x: f"{x['fresh_process_rehydrate_ms']} ms") for r in FULL]])
+rows.append(["full django tree: stepcheck ci cold / warm", *[repo(r, ci) for r in FULL]])
 
 
 def noise(r):
     n = (r or {}).get("results", {}).get("3_noise") or {}
-    return f"{n.get('noise_tracked_count')} noise files tracked of {n.get('files_in_tree')} ({len(n.get('gitignored_tracked', []))} gitignored), init {n.get('init_ms')} ms" if n else "—"
+    return (f"{n.get('noise_tracked_count')} noise files tracked of {n.get('files_in_tree')} "
+            f"({len(n.get('gitignored_tracked', []))} gitignored), init {n.get('init_ms')} ms" if n else "—")
 
 
-rows.append(["Noise tree (migrations, _pb2, .min.js, .d.ts, vendor, dist, build, .gitignored)", noise(B), noise(A)])
+rows.append(["Noise tree (migrations, _pb2, .min.js, .d.ts, vendor, dist, build, .gitignored)", *[noise(r) for r in RUNS]])
 
 
 def resil(r):
@@ -86,11 +100,16 @@ def resil(r):
     return "; ".join(out) if z else "—"
 
 
-rows.append(["Resilience", resil(B), resil(A)])
-out = {"before": before, "after": after, "before_kernel": (B or {}).get("kernel_commit"), "after_kernel": (A or {}).get("kernel_commit"),
-       "after_dirty": (A or {}).get("backend_dirty"), "table": rows}
+rows.append(["Resilience", *[resil(r) for r in RUNS]])
+columns = [{"label": lb, "kernel_commit": (r or {}).get("kernel_commit"), "backend_dirty": (r or {}).get("backend_dirty")}
+           for lb, r in zip(LABELS, RUNS)]
+out = {"labels": LABELS, "columns": columns, "table": rows,
+       # the two-column fields the Slice 36 receipt carried, kept for readers of that shape
+       "before": LABELS[0], "after": LABELS[-1], "before_kernel": columns[0]["kernel_commit"],
+       "after_kernel": columns[-1]["kernel_commit"], "after_dirty": columns[-1]["backend_dirty"]}
 (R / "enterprise_scale.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
-print(f"| Measurement | Before ({before}, {out['before_kernel']}) | After ({after}, {out['after_kernel']}{' +dirty' if out['after_dirty'] else ''}) |")
-print("| --- | --- | --- |")
+heads = [f"{c['label']} ({c['kernel_commit']}{' +dirty' if c['backend_dirty'] else ''})" for c in columns]
+print("| Measurement | " + " | ".join(heads) + " |")
+print("| --- | " + " | ".join("---" for _ in heads) + " |")
 for r in rows:
     print("| " + " | ".join(str(c) for c in r) + " |")

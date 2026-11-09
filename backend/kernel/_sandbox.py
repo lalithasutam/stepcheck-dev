@@ -40,6 +40,59 @@ class _CanonicalFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         exec(compile(self.sources[module.__name__], origin, "exec"), module.__dict__)
 
 
+class _OnDemand(dict):
+    """A dict of texts whose values are fetched from `backing` on first access. `extra`
+    holds eager entries; `alias` maps this dict's keys (import names) to `backing` keys
+    (node ids). Membership and iteration never fetch a value."""
+
+    def __init__(self, backing, extra: dict, alias: dict | None = None) -> None:
+        super().__init__()
+        self._backing, self._alias = backing, alias
+        self._keys = set(alias) if alias is not None else set(backing)
+        for k, v in extra.items():
+            dict.__setitem__(self, k, v)
+            self._keys.add(k)
+
+    def _fetch(self, key):
+        src_key = self._alias[key] if self._alias is not None else key
+        value = self._backing[src_key]
+        dict.__setitem__(self, key, value)
+        return value
+
+    def __contains__(self, key) -> bool:
+        return key in self._keys
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+    def keys(self):
+        return iter(self._keys)
+
+    def __getitem__(self, key):
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        if key not in self._keys:
+            raise KeyError(key)
+        return self._fetch(key)
+
+    def get(self, key, default=None):
+        return self[key] if key in self._keys else default
+
+    def setdefault(self, key, default=None):
+        if key in self._keys:
+            return self[key]
+        dict.__setitem__(self, key, default)
+        self._keys.add(key)
+        return default
+
+    def items(self):
+        for k in list(self._keys):
+            yield k, self[k]
+
+
 def load_namespace(
     node_id: str,
     source: str,
@@ -60,14 +113,13 @@ def load_namespace(
     from . import _okf
 
     paths = dict(project_paths or {})
-    by_node = dict(project_sources)
-    by_node[node_id] = source
+    by_node = _OnDemand(project_sources, {node_id: source})  # each module's text is read only when imported
     if paths:
         names = _okf.module_map({nid: p for nid, p in paths.items() if nid in by_node})
     else:
         names = {nid: nid for nid in by_node}
-    sources = {name: by_node[nid] for name, nid in names.items()}
-    target = _okf.module_name(paths[node_id]) if node_id in paths else node_id
+    sources = _OnDemand(by_node, {}, alias=names)
+    target = _okf.rooted_name(paths[node_id]) if node_id in paths else node_id
     sources.setdefault(target, source)
     inits = {
         nid for nid, p in paths.items() if p.replace("\\", "/").rsplit("/", 1)[-1] == "__init__.py"

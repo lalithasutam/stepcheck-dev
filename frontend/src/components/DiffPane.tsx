@@ -51,8 +51,8 @@ export default function DiffPane({
       {tab === "diff" ? (
         <div className="min-h-0 flex-1">
           <DiffEditor
-            original={node.source}
-            modified={staged || node.source}
+            original={node.source ?? ""}
+            modified={staged || node.source || ""}
             language="python"
             theme="vs-dark"
             options={{

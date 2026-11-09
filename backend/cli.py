@@ -120,21 +120,25 @@ def cmd_audit(args: argparse.Namespace) -> int:
 # (defined ahead of main() and the __main__ block so `python -m cli` works too)
 
 
-def _ci_parse(root: Path) -> list[tuple[str, str]]:
-    """(file, problem) for every tracked module that does not parse. Decodes the
-    way the kernel does (UTF-8, BOM stripped), so a file the kernel tracks never
-    fails here. Python is parsed with `ast`; TypeScript / JavaScript modules get
-    the kernel's balanced-delimiter check."""
-    import ast
-
-    from kernel import _okf, _ts
+def _ci_parse(root: Path, skip: set[str] | None = None, files: list[Path] | None = None) -> list[tuple[str, str]]:
+    """(file, problem) for every tracked module that does not parse, except the paths in
+    `skip` (attested modules: their bytes were parsed when they were committed). `files`
+    is the discovered set when the caller already holds it. Decodes the way the kernel
+    does (UTF-8, BOM stripped), so a file the kernel tracks never fails here. Python is
+    parsed with `ast` — once: what Gate A needs of the module is kept from this parse
+    (`_gates.precheck`); TypeScript / JavaScript modules get the kernel's
+    balanced-delimiter check."""
+    from kernel import _gates, _okf, _ts
 
     problems: list[tuple[str, str]] = []
-    for p in _okf.tracked_files(root):
+    skipped = {s.replace("\\", "/") for s in (skip or ())}
+    for p in (files if files is not None else _okf.tracked_files(root)):
         rel = str(p.relative_to(root))
+        if rel.replace("\\", "/") in skipped:
+            continue
         try:
             source = _okf.decode_source(p.read_bytes())
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             continue  # the kernel leaves non-UTF-8 files untracked
         _mod = _okf.lang_module(rel)
         if _mod is not None:
@@ -143,7 +147,7 @@ def _ci_parse(root: Path) -> list[tuple[str, str]]:
                 problems.append((rel, f"Gate A: invalid {_okf.language(rel)} syntax: {problem}"))
             continue
         try:
-            ast.parse(source, filename=rel)
+            _gates.precheck(rel, source, _okf.parse_cached(source))
         except SyntaxError as exc:
             if _NEWER_GRAMMAR.search(exc.text or "") or isinstance(exc, IndentationError) and "too many levels" in exc.msg:
                 # Valid under a newer Python (PEP 695 generics / `type` aliases) or past this
@@ -160,26 +164,68 @@ _CI_UNPARSEABLE: list[tuple[str, str]] = []
 _NEWER_GRAMMAR = re.compile(r"^\s*(type\s+\w+\s*(\[[^\]]*\])?\s*=|(class|def)\s+\w+\s*\[)")
 
 
-def _ci_frames(root: Path, live: dict[str, str]) -> tuple[list[tuple[str, str]], int]:
-    """(problems, checked) from the existing OKF frames of the nodes in `live`
-    (node_id -> path, the set the current tree actually has): a node left in
+_FM_STATUS = re.compile(r"^status: (\S+)$", re.M)
+_FM_SCALAR = {k: re.compile(rf"^{k}: (.+)$", re.M) for k in ("node_id", "path")}
+_FM_PAYLOAD_SHA = re.compile(r"^    sha256: ([0-9a-f]{64})$", re.M)  # the `payload:` mapping of each envelope
+_FM_PAYLOAD_TURN = re.compile(r"^    turn: (\d+)$", re.M)
+_FM_LIST = {k: re.compile(rf"^{k}:(?: (\[\])|\n((?:- .*\n(?:  .*\n)*)*))", re.M) for k in ("invariants", "invariants_auto_mined")}
+
+
+def _frame_meta(front: str) -> dict:
+    """The frontmatter fields ci reads, from the text the kernel's YAML emitter wrote:
+    `status`, `node_id`, `path`, the latest attestation (the last envelope of
+    `verified`, as a one-element list) and the invariant counts. Line matching, since
+    a YAML load of 900 frames costs seconds; a frame whose shape is unexpected is
+    loaded with YAML instead."""
+    import yaml
+
+    status = _FM_STATUS.search(front)
+    scalars = {k: rx.search(front) for k, rx in _FM_SCALAR.items()}
+    if not status or not all(scalars.values()) or any(m.group(1)[0] in "'\"" for m in scalars.values()):
+        return yaml.safe_load(front) or {}
+    meta: dict = {"status": status.group(1), **{k: m.group(1) for k, m in scalars.items()}}
+    shas, turns = _FM_PAYLOAD_SHA.findall(front), _FM_PAYLOAD_TURN.findall(front)
+    meta["verified"] = [{"payload": {"sha256": shas[-1], "turn": int(turns[-1]) if turns else None}}] if shas else []
+    for k, rx in _FM_LIST.items():
+        m = rx.search(front)
+        meta[k] = [] if (m is None or m.group(1)) else [ln for ln in m.group(2).splitlines() if ln.startswith("- ")]
+    return meta
+
+
+def _hand_written_count(path: Path) -> int:
+    """How many `# okf-invariant:` lines a lazily indexed module carries (the ones
+    `verify_node` executes for it), read from the file without analysing it."""
+    from kernel import _okf
+
+    try:
+        return len(_okf.harvest_invariants(_okf.decode_source(path.read_bytes())))
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def _ci_frames(root: Path, live: dict[str, str]) -> tuple[list[tuple[str, str]], int, dict[str, tuple[str, int]]]:
+    """(problems, checked, attested) from the existing OKF frames of the nodes in
+    `live` (node_id -> path, the set the current tree actually has): a node left in
     DIRTY_OMISSION_RISK, or an attested file whose on-disk bytes no longer hash
-    to its latest DSSE sha256. Frames of nodes that no longer exist under that
-    name (left by an older session) are not evidence and are skipped."""
+    to its latest DSSE sha256. `attested` maps each node whose latest attestation
+    still matches its bytes to (sha256, invariants on record). Frames of nodes that
+    no longer exist under that name (left by an older session) are not evidence
+    and are skipped."""
     import hashlib
 
     import yaml
 
     problems: list[tuple[str, str]] = []
     checked = 0
+    attested: dict[str, tuple[str, int]] = {}
     okf = root / ".stepcheck" / "okf"
     if not okf.is_dir():
-        return problems, checked
+        return problems, checked, attested
     for frame in sorted(okf.glob("*.md")):
         if frame.name == "index.md":
             continue
         try:
-            meta = yaml.safe_load(frame.read_text(encoding="utf-8").split("---\n")[1]) or {}
+            meta = _frame_meta(frame.read_text(encoding="utf-8").split("---\n")[1]) or {}
         except (yaml.YAMLError, IndexError):
             problems.append((frame.stem, f"frame {frame.name} has unreadable frontmatter"))
             continue
@@ -195,16 +241,18 @@ def _ci_frames(root: Path, live: dict[str, str]) -> tuple[list[tuple[str, str]],
         if not verified:
             continue
         payload = (verified[-1] or {}).get("payload", {})
-        attested, turn = payload.get("sha256"), payload.get("turn")
+        attested_sha, turn = payload.get("sha256"), payload.get("turn")
         target = root / rel
         if not target.is_file():
             problems.append((nid, f"attested file {rel} is missing from the tree"))
             continue
         actual = hashlib.sha256(target.read_bytes()).hexdigest()
-        if actual != attested:
+        if actual != attested_sha:
             problems.append((nid, f"{rel} on disk (sha256 {actual[:12]}…) differs from its latest "
-                                  f"attestation (turn {turn}, sha256 {str(attested)[:12]}…)"))
-    return problems, checked
+                                  f"attestation (turn {turn}, sha256 {str(attested_sha)[:12]}…)"))
+        else:
+            attested[nid] = (actual, len(meta.get("invariants") or []) + len(meta.get("invariants_auto_mined") or []))
+    return problems, checked, attested
 
 
 def cmd_ci(args: argparse.Namespace) -> int:
@@ -241,46 +289,84 @@ def cmd_ci(args: argparse.Namespace) -> int:
                     Path(args.report_out).write_text(text, encoding="utf-8", newline="\n")
         return 1
 
+    kernel = StateKernel(ephemeral=True)  # verification only: writes nothing, anywhere
+    sid = kernel.init_session(root)  # a large tree is indexed lazily: paths, hashes, import edges
+    nodes = kernel.graph(sid)["nodes"]
+    problems, checked, attested = _ci_frames(root, {n["node_id"]: n["path"] for n in nodes})
+    attestation_problems = problems
+
+    # Parse phase: every tracked module whose bytes no attestation vouches for is parsed, once
+    # (an attested module parsed when it was committed; its bytes have not changed).
     _CI_UNPARSEABLE.clear()
-    problems = _ci_parse(root)
+    # a lazily indexed session tracks every discovered file, so its node paths are the
+    # discovery; an eager one left unparsable files out and the tree is walked again
+    files = [root / n["path"] for n in nodes] if kernel.index_mode(sid) == "lazy" else None
+    problems = _ci_parse(root, {n["path"] for n in nodes if n["node_id"] in attested}, files)
     if problems:
         return fail(problems, "parse")
+    parsed_note = f" ({len(attested)} attested module(s) parsed at commit time)" if attested else ""
     if _CI_UNPARSEABLE:
-        print(f"  parse         every tracked module parses; {len(_CI_UNPARSEABLE)} file(s) this Python cannot parse are untracked "
-              f"(first: {_CI_UNPARSEABLE[0][0]} — {_CI_UNPARSEABLE[0][1][:80]})")
+        print(f"  parse         every tracked module parses{parsed_note}; {len(_CI_UNPARSEABLE)} file(s) this Python cannot parse "
+              f"are left out of the gates (first: {_CI_UNPARSEABLE[0][0]} — {_CI_UNPARSEABLE[0][1][:80]})")
     else:
-        print("  parse         every module parses")
+        print(f"  parse         every module parses{parsed_note}")
+    unparsable = {rel.replace("\\", "/") for rel, _ in _CI_UNPARSEABLE}
+    nodes = [n for n in nodes if n["path"].replace("\\", "/") not in unparsable]
 
-    kernel = StateKernel(ephemeral=True)  # verification only: writes nothing, anywhere
-    sid = kernel.init_session(root)
-    nodes = kernel.graph(sid)["nodes"]
-    problems, checked = _ci_frames(root, {n["node_id"]: n["path"] for n in nodes})
+    problems = attestation_problems
     if problems:
         return fail(problems, "attestations")
     print("  attestations  " + (f"{checked} frame(s) checked: no dirty nodes, on-disk bytes match"
                                if checked else "no frames for the tracked modules yet"))
 
+    # A module whose latest attestation still matches its bytes — and whose dependencies
+    # all do too — went through Gates A·B·C against exactly this tree when it was committed;
+    # it is reported from its attestation, not re-committed. Every other module is verified
+    # read-only: Gate A and the invariants on record, executed (`StateKernel.verify_node`).
+    deps = {n["node_id"]: n["deps"] for n in nodes}
+    stable = set(attested)
+    while True:
+        unstable = {nid for nid in stable if any(d in deps and d not in stable for d in deps[nid])}
+        if not unstable:
+            break
+        stable -= unstable
+
     rows: list[tuple[str, str, int, str]] = []
     failures: list[tuple[str, str]] = []
-    executed = 0
+    environment: list[str] = []
+    executed = on_record = 0
     for node in nodes:
-        nid, n_inv = node["node_id"], len(node["invariants"])
-        verdict = kernel.commit(sid, nid, source=node["source"])
+        nid = node["node_id"]
+        if nid in stable:
+            sha, n_inv = attested[nid]
+            on_record += n_inv
+            rows.append((nid, "ATTESTED", n_inv, sha[:12]))
+            continue
+        n_inv = len(node["invariants"]) if node.get("materialized", True) else _hand_written_count(root / node["path"])
+        verdict = kernel.verify_node(sid, nid)
         if verdict.accepted:
             executed += n_inv
-            rows.append((nid, "PASS", n_inv, verdict.attestation["payload"]["sha256"][:12]))
+            rows.append((nid, "PASS", n_inv, "-"))
+        elif getattr(verdict.error, "subtype", None) == "ENVIRONMENT":
+            environment.append(nid)  # a third-party import this interpreter lacks: the probes could not run here
+            rows.append((nid, "ENV", n_inv, "-"))
         else:
             failures.append((f"{node['path']} ({nid})", f"Gate {verdict.gate}: {verdict.error}"))
             rows.append((nid, f"FAIL {verdict.gate}", n_inv, "-"))
 
     width = max([len("node")] + [len(r[0]) for r in rows])
-    print(f"  {'node'.ljust(width)}  status  inv  sha256")
+    print(f"  {'node'.ljust(width)}  status    inv  sha256")
     for nid, status, n_inv, sha in rows:
-        print(f"  {nid.ljust(width)}  {status:<7} {n_inv:>3}  {sha}")
+        print(f"  {nid.ljust(width)}  {status:<9} {n_inv:>3}  {sha}")
     if failures:
         return fail(failures, "gates")
-    print(f"stepcheck ci: PASS — {len(rows)} modules verified through Gates A·B·C, "
-          f"{executed} invariants executed")
+    n_attested = sum(1 for r in rows if r[1] == "ATTESTED")
+    verified = len(rows) - n_attested - len(environment)
+    print(f"stepcheck ci: PASS — {len(rows)} modules verified: {n_attested} attested unchanged "
+          f"({on_record} invariants on record), {verified} through Gate A + invariants "
+          f"({executed} invariants executed)"
+          + (f"; {len(environment)} module(s) whose runtime probes this environment cannot execute "
+             f"(third-party import absent): {', '.join(environment)}" if environment else ""))
     if getattr(args, "report", False):
         text = _ci_report(root)
         if text is None:

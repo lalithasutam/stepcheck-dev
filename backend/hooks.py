@@ -494,7 +494,7 @@ def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
             except KeyError:
                 continue
             if rejected:
-                paths = {n["node_id"]: n["path"] for n in kernel.graph(sid)["nodes"]}
+                paths = kernel.node_paths(sid)  # no analysis of the whole tree for a path lookup
                 root = Path(roots.get(sid) or event.get("cwd") or os.getcwd())
                 for nid, why in rejected.items():
                     gate, rest = _split_refusal(why)

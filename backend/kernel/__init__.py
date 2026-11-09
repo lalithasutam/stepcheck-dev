@@ -89,7 +89,13 @@ class OmissionError(GateError):
 
 
 class LogicalError(GateError):
-    """Gate C: a frame invariant no longer holds."""
+    """Gate C: a frame invariant no longer holds. `subtype` is "ENVIRONMENT" when the
+    staged module could not be loaded for want of a package this interpreter lacks
+    (the probes could not run here; `stepcheck ci` reports such a node apart)."""
+
+    def __init__(self, message: str, subtype: str | None = None):
+        super().__init__(message)
+        self.subtype = subtype
 
 
 @dataclass(frozen=True)
@@ -180,13 +186,63 @@ class Telemetry:
     turns: int
 
 
-@dataclass
 class _Node:
-    info: _okf.ModuleInfo
-    status: str = ACTIVE
-    locked: bool = False
-    verified: list[dict] = field(default_factory=list)
-    disk_sha256: str = ""  # SHA-256 of the tracked file as the kernel last saw it
+    """One tracked module. `info` (the analysis) is built on first use when the node was
+    registered lazily — a large repository indexes paths, hashes and import edges only,
+    and analyses a module the first time a checkout, a commit or a dependent needs it.
+    `path`, `node_id` and `deps` are always available without analysis."""
+
+    __slots__ = ("_info", "_source", "status", "locked", "verified", "disk_sha256", "node_id", "path", "deps",
+                 "loader", "source_loader", "unparsable")
+
+    def __init__(self, info: "_okf.ModuleInfo | None" = None, status: str = ACTIVE, locked: bool = False,
+                 verified: list[dict] | None = None, disk_sha256: str = "", *, node_id: str = "", path: str = "",
+                 deps: list[str] | None = None) -> None:
+        self._info = info
+        self._source: str | None = None
+        self.status = status
+        self.locked = locked
+        self.verified = list(verified or [])
+        self.disk_sha256 = disk_sha256  # SHA-256 of the tracked file as the kernel last saw it
+        self.node_id = info.node_id if info is not None else node_id
+        self.path = info.path if info is not None else path
+        self.deps = list(info.deps) if info is not None else list(deps or [])
+        self.loader = None  # () -> ModuleInfo, bound by the kernel for a lazy node
+        self.source_loader = None  # () -> str, the held source of a lazy node
+        self.unparsable = False
+
+    @property
+    def materialized(self) -> bool:
+        return self._info is not None
+
+    @property
+    def info(self) -> "_okf.ModuleInfo":
+        if self._info is None:
+            if self.loader is None:
+                raise KeyError(f"node '{self.node_id}' is not materialized and has no loader")
+            self.info = self.loader()
+        return self._info
+
+    @info.setter
+    def info(self, value: "_okf.ModuleInfo") -> None:
+        self._info = value
+        self._source = None
+        self.node_id, self.path, self.deps = value.node_id, value.path, list(value.deps)
+
+    @property
+    def source(self) -> str:
+        """The held source without forcing an analysis."""
+        if self._info is not None:
+            return self._info.source
+        if self._source is None:
+            if self.source_loader is None:
+                return self.info.source
+            self._source = self.source_loader()
+        return self._source
+
+
+LAZY_THRESHOLD = 200  # files; a larger tree is indexed lazily (STEPCHECK_LAZY_THRESHOLD overrides)
+LAZY_BYTES = 524_288  # or more tracked source bytes than this (STEPCHECK_LAZY_BYTES overrides)
 
 
 @dataclass
@@ -209,6 +265,13 @@ class _Session:
     sync_refused: dict = field(default_factory=dict)
     # Not persisted: node -> the verdict string of that refusal (`refusals`).
     sync_reasons: dict = field(default_factory=dict)
+    # The git commit the tree was at when the session opened (a lazy node's baseline bytes
+    # can be read back from it when the working tree moved on), or None outside git.
+    git_head: str | None = None
+    # Whether the tree was indexed lazily (every discovered file is a node, analysed on demand).
+    lazy: bool = False
+    # Not persisted: ((root package, node count), import map) — see StateKernel._modules.
+    modules: tuple | None = None
     # Not persisted: st_mtime_ns of the session file when this process last read
     # or wrote it (`refresh_sessions` reloads a session another process rewrote).
     disk_mtime_ns: int = 0
@@ -228,14 +291,22 @@ class StateKernel:
         root = Path(project_root).resolve()
         self._point_cache(root)
         files = _okf.tracked_files(root)
-        loaded: dict[Path, tuple[str, bytes]] = {}
+        import os
+
+        raws: dict[Path, bytes] = {}
         for p in files:
-            raw = p.read_bytes()
+            raws[p] = p.read_bytes()
+        # Lazy when the tree is large by either measure: many files, or few but big ones (a
+        # 117-file, 55k-LOC project analysed eagerly costs seconds a first checkout need not pay).
+        lazy = (len(files) > int(os.environ.get("STEPCHECK_LAZY_THRESHOLD") or LAZY_THRESHOLD)
+                or sum(len(b) for b in raws.values()) > int(os.environ.get("STEPCHECK_LAZY_BYTES") or LAZY_BYTES))
+        loaded: dict[Path, tuple[str, bytes]] = {}
+        for p, raw in raws.items():
             try:
                 text = _okf.decode_source(raw)
             except UnicodeDecodeError:
                 continue  # not UTF-8: leave untracked, write-back could not round-trip it
-            if _okf.language(str(p)) == "python":
+            if _okf.language(str(p)) == "python" and not lazy:
                 try:
                     ast.parse(text)
                 except (SyntaxError, ValueError, RecursionError, MemoryError):
@@ -256,15 +327,134 @@ class StateKernel:
         }
         modules = _okf.module_map({ids[p]: rel[p] for p in loaded})
         nodes: dict[str, _Node] = {}
-        for p, (text, raw) in loaded.items():
-            info = _okf.analyze(ids[p], rel[p], text, modules)
-            nodes[info.node_id] = _Node(info=info, disk_sha256=_sha256(raw))
         session_id = f"sk-{uuid.uuid4().hex[:12]}"
-        session = _Session(session_id=session_id, root=root, nodes=nodes)
+        session = _Session(session_id=session_id, root=root, nodes=nodes, git_head=_git_head(root) if lazy else None, lazy=lazy)
+        dirty_in_git = _git_dirty_paths(root) if (lazy and session.git_head) else None
+        for p, (text, raw) in loaded.items():
+            if lazy:
+                # Lazy: the path, the bytes' hash and the import edges (a line scan for
+                # Python, the language module's import resolver otherwise — no analysis) are
+                # enough to answer locate / sync / dependents; the analysis waits for the
+                # first checkout, commit or dependent that needs it.
+                _mod = _okf.lang_module(rel[p])
+                if _mod is None:
+                    deps = sorted({nid for nid, _n, _l in _okf._records_from(
+                        ids[p], rel[p], _okf.regex_import_statements(text), modules)})
+                else:
+                    deps = sorted(_mod.resolve_imports(ids[p], rel[p], text, modules))
+                node = _Node(node_id=ids[p], path=rel[p], disk_sha256=_sha256(raw), deps=deps)
+                node._source = text
+                if dirty_in_git is None or rel[p].replace("\\", "/") in dirty_in_git:
+                    self._keep_blob(root, raw)  # not recoverable from git later: keep the baseline bytes
+                nodes[node.node_id] = node
+            else:
+                info = _okf.analyze(ids[p], rel[p], text, modules)
+                nodes[info.node_id] = _Node(info=info, disk_sha256=_sha256(raw))
+        self._bind(session)
         self._sessions[session_id] = session
         self._register(session)
         self._flush(session)
         return session_id
+
+    def _bind(self, s: _Session) -> None:
+        """Give every lazy node of `s` its loaders (the analysis, and the held source)."""
+        for node in s.nodes.values():
+            if not node.materialized:
+                if node.loader is None:
+                    node.loader = (lambda n=node, s=s: self._materialize(s, n))
+                if node.source_loader is None:
+                    node.source_loader = (lambda n=node, s=s: self._baseline(s, n))
+
+    def _materialize(self, s: _Session, node: _Node) -> _okf.ModuleInfo:
+        """Analyse a lazy node now (content cache first); a file this Python cannot parse
+        gets an empty analysis and is flagged, so the gates can say why at commit time."""
+        self._point_cache(s.root)
+        source = node.source
+        try:
+            return _okf.analyze(node.node_id, node.path, source, self._modules(s))
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            node.unparsable = True
+            return _okf.ModuleInfo(node_id=node.node_id, path=node.path, source=source, deps=list(node.deps))
+
+    def _baseline(self, s: _Session, node: _Node) -> str:
+        """The source a lazy node holds: the file on disk while its bytes are the ones the
+        session saw, else the attested frame, the kept blob, or the git object the tree
+        was at when the session opened. When none of those has it, the disk bytes become
+        the baseline and the event is recorded."""
+        path = s.root / node.path
+        try:
+            raw = path.read_bytes()
+            if _sha256(raw) == node.disk_sha256:
+                return _okf.decode_source(raw)
+        except (OSError, UnicodeDecodeError):
+            raw = None
+        frame = s.root / ".stepcheck" / "okf" / f"{node.node_id}.md"
+        if node.verified and frame.is_file():
+            text = _okf.frame_source(frame.read_text(encoding="utf-8"))
+            if text is not None and _sha256(text.encode("utf-8")) == node.verified[-1]["payload"]["sha256"]:
+                return text
+        blob = s.root / ".stepcheck" / "cache" / "blobs" / node.disk_sha256
+        if blob.is_file():
+            try:
+                return _okf.decode_source(blob.read_bytes())
+            except UnicodeDecodeError:
+                pass
+        if s.git_head:
+            shown = _git_show(s.root, s.git_head, node.path)
+            if shown is not None and _sha256(shown) == node.disk_sha256:
+                return _okf.decode_source(shown)
+        s.events.append({"kind": "baseline_lost", "node_id": node.node_id})
+        if raw is not None:
+            node.disk_sha256 = _sha256(raw)
+            return _okf.decode_source(raw)
+        return ""
+
+    def _keep_blob(self, root: Path, raw: bytes) -> None:
+        if self._ephemeral:
+            return
+        blob = root / ".stepcheck" / "cache" / "blobs" / _sha256(raw)
+        if not blob.exists():
+            try:
+                _okf.write_atomic(blob, raw)
+            except OSError:
+                pass
+
+    def node_paths(self, session_id: str) -> dict[str, str]:
+        """node_id -> tracked path, for every node, without analysing any of them."""
+        return {nid: n.path for nid, n in self._session(session_id).nodes.items()}
+
+    def index_mode(self, session_id: str) -> str:
+        """`"lazy"` when the tree was indexed by path, hash and import edges (every discovered
+        file is a node, analysed on first use), `"eager"` when every module was analysed at
+        indexing (files this Python cannot parse were left out)."""
+        return "lazy" if self._session(session_id).lazy else "eager"
+
+    def verify_node(self, session_id: str, node_id: str) -> CommitVerdict:
+        """Read-only verification of the bytes a node holds — what `stepcheck ci` runs on a
+        module nothing attests: Gate A (it parses; every name a dependent imports from it is
+        bound) and the invariants on record, executed: every invariant of an analysed node,
+        the hand-written `# okf-invariant:` lines alone of a lazily indexed one (nothing is
+        mined for the check — a module's own guards hold against itself by construction).
+        Nothing is mutated, no event is recorded, the verdict carries no attestation."""
+        s, node = self._get(session_id, node_id)
+        self._point_cache(s.root)
+        source = node.source
+        try:
+            tree = _gates.gate_a(node_id, False, source, s.nodes, modules=self._modules(s))
+        except (MechanicalError, SyntaxError, RecursionError, MemoryError) as exc:
+            return CommitVerdict(accepted=False, gate="A", error=_as_mechanical(exc, node_id), attestation=None, dirtied=[])
+        if node.materialized:
+            invariants, mined = list(node.info.invariants), list(node.info.mined_invariants)
+        else:  # a lazy node has nothing on record; a Python one still carries its hand-written lines
+            invariants, mined = (_okf.harvest_invariants(source) if _okf.lang_module(node.path) is None else []), []
+        if invariants:
+            try:
+                _gates.gate_c(node_id, invariants, source, _LazySources(s.nodes, node_id), mined=mined,
+                              project_paths={nid: n.path for nid, n in s.nodes.items()},
+                              tree=tree if isinstance(tree, ast.Module) else None)
+            except LogicalError as exc:
+                return CommitVerdict(accepted=False, gate="C", error=exc, attestation=None, dirtied=[])
+        return CommitVerdict(accepted=True, gate=None, error=None, attestation=None, dirtied=[])
 
     def checkout(
         self,
@@ -346,11 +536,13 @@ class StateKernel:
         source = source.replace("\r\n", "\n")  # canonical state is always LF
         self._point_cache(s.root)
         try:
-            tree = _gates.gate_a(node_id, node.locked, source, s.nodes)
-        except (MechanicalError, RecursionError, MemoryError) as exc:
+            stitched = _okf.stitch(node.info.source, source) if _okf.lang_module(node.info.path) is None else None
+            tree = _gates.gate_a(node_id, node.locked, source, s.nodes, tree=stitched)
+        except (MechanicalError, SyntaxError, RecursionError, MemoryError) as exc:
             return self._reject(s, node, "A", _as_mechanical(exc, node_id), dry_run=dry_run)
 
-        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s), previous=node.info)
+        staged_tree = tree if isinstance(tree, ast.Module) else None
+        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s), previous=node.info, tree=staged_tree)
         try:
             _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion, nodes=s.nodes,
                           trees=_shared_trees(node.info.source, tree))
@@ -368,10 +560,11 @@ class StateKernel:
                 node_id,
                 live_invariants,
                 source,
-                {nid: n.info.source for nid, n in s.nodes.items() if nid != node_id},
+                _LazySources(s.nodes, node_id),
                 mined=node.info.mined_invariants,
-                project_paths={nid: n.info.path for nid, n in s.nodes.items()},
+                project_paths={nid: n.path for nid, n in s.nodes.items()},
                 previous_source=node.info.source,
+                tree=staged_tree,
             )
         except LogicalError as exc:
             return self._reject(s, node, "C", exc, dry_run=dry_run)
@@ -398,27 +591,33 @@ class StateKernel:
     def graph(self, session_id: str) -> dict:
         """Read-only OKF graph view for Seam 2 / the UI (nodes + edges)."""
         s = self._session(session_id)
+        # A lazily indexed node that nothing has needed yet is listed by its path, hash
+        # and import edges (`materialized: false`); the view forces no analysis. An
+        # attested node's facts are on record (its session entry), so they are shown.
+        shown = {nid: (n.materialized or bool(n.verified)) for nid, n in s.nodes.items()}
         nodes = [
             {
                 "node_id": nid,
-                "path": n.info.path,
+                "path": n.path,
                 "status": n.status,
                 "locked": n.locked,
-                "deps": list(n.info.deps),
-                "exports": list(n.info.exports),
-                "preserved_symbols": list(n.info.preserved_symbols),
-                "invariants": list(n.info.invariants),
-                "invariants_auto_mined": list(n.info.mined_invariants),
+                "deps": list(n.deps),
+                "exports": list(n.info.exports) if shown[nid] else [],
+                "preserved_symbols": list(n.info.preserved_symbols) if shown[nid] else [],
+                "invariants": list(n.info.invariants) if shown[nid] else [],
+                "invariants_auto_mined": list(n.info.mined_invariants) if shown[nid] else [],
                 "verified": len(n.verified),
                 "attestation": n.verified[-1] if n.verified else None,
-                "source": n.info.source,
+                "source": n.info.source if shown[nid] else None,
+                "materialized": shown[nid],
+                "disk_sha256": n.disk_sha256,
             }
             for nid, n in sorted(s.nodes.items())
         ]
         edges = [
             {"source": nid, "target": dep}
             for nid, n in sorted(s.nodes.items())
-            for dep in n.info.deps
+            for dep in n.deps
         ]
         return {"nodes": nodes, "edges": edges}
 
@@ -502,9 +701,11 @@ class StateKernel:
         return {**_okf.PERF, **_gates.PERF}
 
     def _point_cache(self, root: Path) -> None:
-        """Aim the content-addressed analysis cache at this project; an ephemeral
-        kernel reads it but writes nothing under the tree."""
+        """Aim the content-addressed analysis cache at this project (an ephemeral
+        kernel reads it but writes nothing under the tree) and name the root package
+        when the root directory is itself a package."""
         _okf.set_cache(root / ".stepcheck" / "cache" / "analysis", writable=not self._ephemeral)
+        _okf.set_root_package(root.name if (root / "__init__.py").is_file() else None)
 
     def provenance(self, session_id: str, node_id: str) -> dict:
         """The node's latest attestation as an in-toto Statement v1 inside a DSSE
@@ -618,8 +819,8 @@ class StateKernel:
             return None
         wanted = str(rel).replace("\\", "/")
         for nid, n in s.nodes.items():
-            if n.info.path.replace("\\", "/") == wanted:
-                return {"node_id": nid, "path": n.info.path, "status": n.status, "locked": n.locked,
+            if n.path.replace("\\", "/") == wanted:  # the path never needs the analysis; the hit's facts do
+                return {"node_id": nid, "path": n.path, "status": n.status, "locked": n.locked,
                         "source_tokens": _tokens.count(n.info.source),
                         "invariants": list(n.info.invariants), "invariants_auto_mined": list(n.info.mined_invariants)}
         return None
@@ -698,7 +899,7 @@ class StateKernel:
             if n.status != REJECTED:
                 continue
             try:
-                if _sha256((s.root / n.info.path).read_bytes()) == n.disk_sha256:
+                if _sha256((s.root / n.path).read_bytes()) == n.disk_sha256:
                     continue
             except OSError:
                 pass
@@ -778,10 +979,10 @@ class StateKernel:
         reverified: list[str] = []
         facades: list[tuple[str, set[str]]] = []  # (dirtied importer, the broken names it binds)
         for dep_id, dep in sorted(s.nodes.items()):
-            if dep_id == node.info.node_id or node.info.node_id not in dep.info.deps:
+            if dep_id == node.info.node_id or node.info.node_id not in dep.deps:
                 continue
             imported = _okf.resolve_imports(
-                dep_id, dep.info.path, dep.info.source, modules
+                dep_id, dep.path, dep.source, modules
             ).get(node.info.node_id, set())
             # The contract a dependent relies on: the names it imports (`from m
             # import a`, `import { a } from './m'`, `use crate::m::a`), or every
@@ -811,10 +1012,10 @@ class StateKernel:
             if not names:
                 continue
             for far_id, far in sorted(s.nodes.items()):
-                if far_id in dirtied or far_id == node.info.node_id or via_id not in far.info.deps:
+                if far_id in dirtied or far_id == node.info.node_id or via_id not in far.deps:
                     continue
                 via = s.nodes[via_id]
-                hit = {n for n in _okf.resolve_imports(far_id, far.info.path, far.info.source, modules)
+                hit = {n for n in _okf.resolve_imports(far_id, far.path, far.source, modules)
                        .get(via_id, set()) if n} & names
                 if hit and via is not None:
                     far.status = DIRTY
@@ -857,30 +1058,31 @@ class StateKernel:
         if dep.status in (DIRTY, REJECTED) or dep.disk_sha256 is None:
             return False
         try:
-            if _sha256((s.root / dep.info.path).read_bytes()) != dep.disk_sha256:
+            if _sha256((s.root / dep.path).read_bytes()) != dep.disk_sha256:
                 return False  # changed behind the session: the agent must look at it
         except OSError:
             return False
-        dep_id, source = dep.info.node_id, dep.info.source
+        dep_id, source = dep.node_id, dep.info.source
         try:
             # Same bytes, so a lock is not being violated: Gate A checks syntax
             # and the names this dependent's own dependents import.
             _gates.gate_a(dep_id, False, source, s.nodes)
-            staged = _okf.analyze(dep_id, dep.info.path, source, modules, previous=dep.info)
+            staged = _okf.analyze(dep_id, dep.path, source, modules, previous=dep.info)
             _gates.gate_b(dep, staged, source, source, False)
             _gates.gate_c(
                 dep_id,
                 dep.info.invariants,
                 source,
-                {nid: n.info.source for nid, n in s.nodes.items() if nid != dep_id},
+                _LazySources(s.nodes, dep_id),
                 mined=dep.info.mined_invariants,
-                project_paths={nid: n.info.path for nid, n in s.nodes.items()},
+                project_paths={nid: n.path for nid, n in s.nodes.items()},
+                previous_source=source,
             )
         except GateError:
             return False
         dep.info = staged
         dep.status = LOCKED if dep.locked else VERIFIED
-        dep.verified.append(_dsse_envelope(dep_id, dep.info.path, dep.disk_sha256, staged.exports, ordinal))
+        dep.verified.append(_dsse_envelope(dep_id, dep.path, dep.disk_sha256, staged.exports, ordinal))
         return True
 
     # -- internals --------------------------------------------------------
@@ -900,6 +1102,7 @@ class StateKernel:
             raise KeyError(session_id)
         s = _session_from_json(_read_json(path))
         s.disk_mtime_ns = path.stat().st_mtime_ns
+        self._bind(s)
         self._sessions[session_id] = s
         return s
 
@@ -931,6 +1134,7 @@ class StateKernel:
                 continue
             fresh = _session_from_json(_read_json(path))
             fresh.disk_mtime_ns = mtime
+            self._bind(fresh)
             self._sessions[sid] = fresh
             out["reloaded"].append(sid)
         return out
@@ -940,7 +1144,12 @@ class StateKernel:
         return s, s.nodes[node_id]
 
     def _modules(self, s: _Session) -> dict[str, str]:
-        return _okf.module_map({nid: n.info.path for nid, n in s.nodes.items()})
+        """The session's import map (dotted name -> node id); the node set is fixed at
+        indexing, so it is built once per session object and per root package."""
+        key = (_okf.ROOT_PACKAGE, len(s.nodes))
+        if s.modules is None or s.modules[0] != key:
+            s.modules = (key, _okf.module_map({nid: n.path for nid, n in s.nodes.items()}))
+        return s.modules[1]
 
     def _registry(self) -> dict[str, str]:
         """session_id -> project root: the only thing the per-user index holds."""
@@ -1006,22 +1215,31 @@ def _write_json(path: Path, data: dict) -> None:
     _okf.write_atomic(path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
 
-def _session_to_json(s: _Session) -> dict:
+def _node_to_json(n: _Node) -> dict:
+    """A node's persisted form. A lazy node is its path, hash and import edges; a
+    materialized one adds its analysis without the source text when the text is
+    recoverable (the file on disk still hashes to it, or its frame attests it) — the
+    source itself is stored only for a node whose held text is nowhere else."""
     import dataclasses
 
+    out = {"status": n.status, "locked": n.locked, "verified": n.verified, "disk_sha256": n.disk_sha256,
+           "node_id": n.node_id, "path": n.path, "deps": list(n.deps)}
+    if n.materialized:
+        info = dataclasses.asdict(n.info)
+        source = info.pop("source")
+        if not n.verified:
+            info["source"] = source  # unattested: no frame holds this text yet
+        out["info"] = info
+    return out
+
+
+def _session_to_json(s: _Session) -> dict:
     return {
         "session_id": s.session_id,
         "root": str(s.root),
-        "nodes": {
-            nid: {
-                "info": dataclasses.asdict(n.info),
-                "status": n.status,
-                "locked": n.locked,
-                "verified": n.verified,
-                "disk_sha256": n.disk_sha256,
-            }
-            for nid, n in s.nodes.items()
-        },
+        "git_head": s.git_head,
+        "lazy": s.lazy,
+        "nodes": {nid: _node_to_json(n) for nid, n in s.nodes.items()},
         "events": s.events,
         "omissions_blocked": s.omissions_blocked,
         "scratchpad": s.scratchpad,
@@ -1029,16 +1247,20 @@ def _session_to_json(s: _Session) -> dict:
 
 
 def _session_from_json(data: dict) -> _Session:
-    nodes = {
-        nid: _Node(
-            info=_okf.ModuleInfo(**n["info"]),
-            status=n["status"],
-            locked=n["locked"],
-            verified=list(n["verified"]),
-            disk_sha256=n.get("disk_sha256", ""),
-        )
-        for nid, n in data["nodes"].items()
-    }
+    nodes: dict[str, _Node] = {}
+    for nid, n in data["nodes"].items():
+        info_data = n.get("info")
+        if info_data is not None and "source" in info_data:
+            node = _Node(info=_okf.ModuleInfo(**info_data), status=n["status"], locked=n["locked"],
+                         verified=list(n["verified"]), disk_sha256=n.get("disk_sha256", ""))
+        else:
+            node = _Node(status=n["status"], locked=n["locked"], verified=list(n["verified"]),
+                         disk_sha256=n.get("disk_sha256", ""), node_id=n.get("node_id", nid),
+                         path=n.get("path", (info_data or {}).get("path", "")), deps=n.get("deps", (info_data or {}).get("deps", [])))
+        nodes[nid] = node
+        if info_data is not None and "source" not in info_data:
+            # the analysis is kept (nothing is re-mined); the text comes back through the baseline on first use
+            node.loader = (lambda d=info_data, node=node: _okf.ModuleInfo(**{**d, "source": node.source}))
     return _Session(
         session_id=data["session_id"],
         root=Path(data["root"]),
@@ -1046,7 +1268,81 @@ def _session_from_json(data: dict) -> _Session:
         events=list(data.get("events", [])),
         omissions_blocked=int(data.get("omissions_blocked", 0)),
         scratchpad=list(data.get("scratchpad", [])),
+        git_head=data.get("git_head"),
+        lazy=bool(data.get("lazy", False)),
     )
+
+
+def _git_head(root: Path) -> str | None:
+    import subprocess
+
+    if not (root / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
+
+
+def _git_dirty_paths(root: Path) -> set[str]:
+    """Paths modified or untracked in the working tree (their bytes are not in HEAD)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "-z", "--untracked-files=all"],
+                             capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    paths: set[str] = set()
+    for entry in out.stdout.split(b"\0"):
+        if len(entry) > 3:
+            paths.add(entry[3:].decode("utf-8", "replace").replace("\\", "/"))
+    return paths
+
+
+def _git_show(root: Path, commit: str, rel: str) -> bytes | None:
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", str(root), "show", f"{commit}:{rel.replace(chr(92), '/')}"],
+                             capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+class _LazySources(dict):
+    """node_id -> held source for every node but one, read on demand: the sandbox binds a
+    project import to its canonical text only when the module under test imports it,
+    so a 2,000-module repository never has every file read for one commit."""
+
+    def __init__(self, nodes: dict, exclude: str) -> None:
+        super().__init__()
+        self._nodes = {nid: n for nid, n in nodes.items() if nid != exclude}
+
+    def __contains__(self, key) -> bool:
+        return key in self._nodes
+
+    def __iter__(self):
+        return iter(self._nodes)
+
+    def __len__(self) -> int:
+        return len(self._nodes)
+
+    def keys(self):
+        return self._nodes.keys()
+
+    def __getitem__(self, key):
+        return self._nodes[key].source
+
+    def get(self, key, default=None):
+        node = self._nodes.get(key)
+        return node.source if node is not None else default
+
+    def items(self):
+        for nid in self._nodes:
+            yield nid, self[nid]
 
 
 def _as_mechanical(exc: BaseException, node_id: str) -> MechanicalError:
@@ -1054,6 +1350,8 @@ def _as_mechanical(exc: BaseException, node_id: str) -> MechanicalError:
     interpreter's limits (recursion, memory) on a pathological file."""
     if isinstance(exc, MechanicalError):
         return exc
+    if isinstance(exc, SyntaxError):  # the edited block alone was parsed (stitch): its error is the edit's
+        return MechanicalError(f"invalid AST syntax in '{node_id}': {exc.msg} (line {exc.lineno})")
     return MechanicalError(f"'{node_id}' is past the parser's limits: {type(exc).__name__}")
 
 

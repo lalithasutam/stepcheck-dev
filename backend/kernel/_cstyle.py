@@ -725,13 +725,13 @@ def gate_a(node_id: str, locked: bool, source: str, nodes, *, syntax_problem_fn,
     problem = syntax_problem_fn(source)
     if problem:
         raise MechanicalError(f"invalid {lang} syntax in '{node_id}': {problem}")
-    paths = {nid: n.info.path for nid, n in nodes.items()}
+    paths = {nid: n.path for nid, n in nodes.items()}
     modules = _okf.module_map(paths)
     bound = bound_names_fn(source)
     for dep_id, dep_node in nodes.items():
-        if dep_id == node_id or node_id not in dep_node.info.deps:
+        if dep_id == node_id or node_id not in dep_node.deps:
             continue
-        required = resolve_imports_fn(dep_id, dep_node.info.path, dep_node.info.source, modules).get(node_id, set())
+        required = resolve_imports_fn(dep_id, dep_node.path, dep_node.source, modules).get(node_id, set())
         missing = sorted(n for n in required if n is not None and n not in bound)
         if missing:
             raise MechanicalError(

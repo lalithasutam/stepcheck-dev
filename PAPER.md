@@ -1,6 +1,6 @@
 # StepCheck: a deterministic context firewall and gated state engine for AI coding agents
 
-Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `4912e62` (post-slice).
+Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `3380919` (post-slice).
 
 ## Abstract
 
@@ -88,7 +88,7 @@ Faults are synthetic AST mutations. All timings come from one Windows machine. T
 
 ## 4. Reproducibility
 
-`python -m pytest -q` (346 passed), `stepcheck ci .` (78 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
+`python -m pytest -q` (363 passed), `stepcheck ci .` (79 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
 
 ## 5. v0.2 campaign results
 
@@ -510,6 +510,55 @@ Green receipt after landing: 10 passed, 0 failed, 0 timed out.
 Backend LOC 7,399; audit over 131 sessions, 7,612 assistant turns, 95 cache-cliff turns, 5,876,819 re-billed tokens, $15.87 above cache-read.
 
 README / LAUNCH / CLAUDE.md / .cursorrules figures rewritten by `sync_docs.py` from receipts: 49 substitutions.
+
+
+## 7. Enterprise monorepo scaling (Slices 35 → 36 → 37)
+
+Measured by `.stepcheck/discovery/benchmark_enterprise_scale.py` on the fifteen largest cached modules, the `django/` package, the full django tree, a noise tree and the resilience cases; one column per slice (receipt `receipts/enterprise_scale.json`). The last column's run times `init_session` without tracemalloc attached; the earlier columns carry its overhead. `stepcheck ci` is timed twice in the benchmark process, after the hook probes; a fresh process measures the package at the warm figure.
+
+| Measurement | slice35 | slice36 | slice37 |
+| --- | --- | --- | --- |
+| Monolith files (15 files, 72,904 LOC): dry-run commit, one function edited | p50 1216.1 / p95 1850.1 / max 1929.7 ms; <25 ms 0.0%, <50 ms 0.0% | p50 453.1 / p95 873.0 / max 921.4 ms; <25 ms 0.0%, <50 ms 0.0% | p50 38.7 / p95 133.7 / max 432.8 ms; <25 ms 5.8%, <50 ms 75.4% |
+| Monolith files: landed commit | p50 1285.4 / p95 1979.1 / max 2034.1 ms; <25 ms 0.0%, <50 ms 0.0% | p50 630.5 / p95 813.6 / max 1043.5 ms; <25 ms 0.0%, <50 ms 0.0% | p50 183.3 / p95 223.0 / max 325.2 ms; <25 ms 0.0%, <50 ms 0.0% |
+| Monolith files: init_session | p50 396.1 / p95 559.1 / max 594.6 ms; <25 ms 0.0%, <50 ms 0.0% | p50 473.4 / p95 589.9 / max 628.8 ms; <25 ms 0.0%, <50 ms 0.0% | p50 368.0 / p95 572.1 / max 590.9 ms; <25 ms 0.0%, <50 ms 0.0% |
+| Monolith files: focused checkout | p50 255.1 / p95 398.4 / max 404.9 ms; <25 ms 0.0%, <50 ms 0.0% | p50 449.1 / p95 615.4 / max 626.1 ms; <25 ms 0.0%, <50 ms 6.7% | p50 273.2 / p95 388.9 / max 552.8 ms; <25 ms 0.0%, <50 ms 6.7% |
+| django package (930 files, 170,643 LOC): cold init_session | 135.9 s (6.8 files/s) | 89.9 s (9.8 files/s) | 1.1 s (793.2 files/s) |
+| django package: peak memory (tracemalloc / RSS) / session file | 58.9 MB / None MB / 7.7 MB | 58.0 MB / None MB / 7.3 MB | 16.3 MB / None MB / 0.3 MB |
+| django package: in-process PreToolUse Edit hook on db/models/sql/query.py | p50 898.3 / p95 1100.1 / max 1100.1 ms; <25 ms 0.0%, <50 ms 0.0% | p50 355.7 / p95 444.3 / max 444.3 ms; <25 ms 0.0%, <50 ms 0.0% | p50 17.6 / p95 234.4 / max 234.4 ms; <25 ms 80.0%, <50 ms 80.0% |
+| django package: PreToolUse Read hook | p50 3.2 / p95 97.3 / max 97.3 ms; <25 ms 66.7%, <50 ms 66.7% | p50 4.2 / p95 128.1 / max 128.1 ms; <25 ms 66.7%, <50 ms 66.7% | p50 3.2 / p95 1035.1 / max 1035.1 ms; <25 ms 66.7%, <50 ms 66.7% |
+| django package: fresh-process session rehydrate + locate | 138.0 ms | 128.2 ms | 67.6 ms |
+| django package: stepcheck ci cold / warm | 107.2 s / 91.0 s, exit 1 | 55.9 s / 46.5 s, exit 1 | 5.2 s / 6.1 s, exit 0 |
+| full django tree (2980 files, 537,414 LOC): cold init_session | CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48) | 231.4 s (11.5 files/s) | 2.8 s (1016.5 files/s) |
+| full django tree: peak memory / session file | CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48) | 242.0 MB / 22.1 MB | 57.8 MB / 1.0 MB |
+| full django tree: PreToolUse Edit hook | CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48) | p50 625.2 / p95 700.7 / max 700.7 ms; <25 ms 0.0%, <50 ms 0.0% | p50 24.0 / p95 341.3 / max 341.3 ms; <25 ms 60.0%, <50 ms 80.0% |
+| full django tree: fresh-process session rehydrate + locate | CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48) | 435.7 ms | 85.1 ms |
+| full django tree: stepcheck ci cold / warm | CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48) | 9.7 s / 9.8 s, exit 1 | 14.7 s / 14.5 s, exit 1 |
+| Noise tree (migrations, _pb2, .min.js, .d.ts, vendor, dist, build, .gitignored) | 7 noise files tracked of 16 (2 gitignored), init 3237.2 ms | 0 noise files tracked of 16 (0 gitignored), init 104.9 ms | 0 noise files tracked of 16 (0 gitignored), init 110.0 ms |
+| Resilience | nesting_120: crash; nesting_400: crash; circular+*: ok; BOM/CRLF: ok | nesting_120: untracked: past the parser's limits, index unaffected; nesting_400: untracked: past the parser's limits, index unaffected; circular+*: ok; BOM/CRLF: ok | nesting_120: untracked: past the parser's limits, index unaffected; nesting_400: untracked: past the parser's limits, index unaffected; circular+*: ok; BOM/CRLF: ok |
+
+### 7.1 Zero-trust audit of Slices 35–37
+
+`audit_not_benchmark_shaped.py` (receipt `receipts/not_benchmark_shaped_audit.json`) diffed `backend/` against 36c6280: 2,346 added lines, 8 corpus-name literals outside tests, every one in a docstring or comment (the receipt lists each with its line). Every exclusion pattern and gate exemption is printed verbatim in the receipt.
+
+Fault injection in guarded functions at the top, middle and bottom of the monoliths, committed through the fast path (stitched on 100.0% of commits): 111 of 124 blocked (89.5%). The accepted faults are `return X` guards neutered to `return None`: the early return survives, the value does not, and a structural guard invariant does not see values.
+
+| fault | blocked | rate | p50 when blocking | p95 |
+| --- | --- | --- | --- | --- |
+| guard drop | 38 / 38 | 100.0% | 147.5 ms | 293.2 ms |
+| relational flip | 13 / 13 | 100.0% | 166.9 ms | 241.1 ms |
+| action neuter | 22 / 35 | 62.9% | 137.3 ms | 330.3 ms |
+| stub wipe | 38 / 38 | 100.0% | 41.0 ms | 84.7 ms |
+
+Bisimulation over 233 edits (benign function, method, multi-function and module-constant edits, every injected fault, SWE-bench gold patches): the fast path — stitched tree, segment reuse, memory and disk cache — against a cold path with every memo cleared and no stitched tree, against a from-scratch analysis of the edited text, and against Gate C with every probe in scope: 0 divergence(s) in verdict, gate or invariant set.
+
+Zero-shot trees never referenced by the benchmark (fastapi, tornado and scrapy as fresh shallow clones; the Martian online tree, Python and Rust). The two `stepcheck ci` failures are real broken imports in those trees (`maint/test/redbot/red_test.py` imports a symbol tornado removed; `etl/main.py` imports a name its target lacks).
+
+| tree | files | LOC | cold init | stepcheck ci | hook Edit p50 | faults caught |
+| --- | --- | --- | --- | --- | --- | --- |
+| fastapi | 1,224 | 132,565 | 0.87 s | exit 0 in 3.50 s | 81.3 ms | 75.0% |
+| tornado | 117 | 55,462 | 0.42 s | exit 1 in 1.20 s | 11.5 ms | 100.0% |
+| scrapy | 543 | 111,640 | 0.54 s | exit 0 in 2.90 s | 32.7 ms | 75.0% |
+| martian/online (py+rs) | 52 | 13,904 | 0.33 s | exit 1 in 0.80 s | 9.7 ms | 66.7% |
 
 ## 6. Head-to-Head Market Ablation & SWE-bench Verified Analysis
 

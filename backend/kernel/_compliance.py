@@ -139,11 +139,20 @@ def leak_check(duc: dict, paths: list[str]) -> dict:
                       "(the card's own keys and language labels excluded), and for code-shaped tokens"}
 
 
+def _file_sha(node: dict) -> str:
+    """sha256 of a tracked file: of its canonical source when the graph carries it, else
+    (a lazily indexed module nothing has analysed) of the bytes the session hashed."""
+    source = node.get("source")
+    if source is not None:
+        return hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return str(node.get("disk_sha256") or "")
+
+
 def bundle(kernel, session_id: str) -> dict:
     graph = kernel.graph(session_id)
     events = kernel.events(session_id)
     nodes = graph["nodes"]
-    file_digests = sorted(hashlib.sha256(n["source"].encode("utf-8")).hexdigest() for n in nodes)
+    file_digests = sorted(_file_sha(n) for n in nodes)
     languages: dict[str, int] = {}
     for n in nodes:
         lang = _okf.language(n["path"]) if hasattr(_okf, "language") else "python"
@@ -181,7 +190,7 @@ def bundle(kernel, session_id: str) -> dict:
         "_type": DUAE_TYPE,
         "session_id": session_id,
         "duc_digest": hashlib.sha256(_canonical(duc).encode("utf-8")).hexdigest(),
-        "files": [{"path": n["path"].replace("\\", "/"), "sha256": hashlib.sha256(n["source"].encode("utf-8")).hexdigest(),
+        "files": [{"path": n["path"].replace("\\", "/"), "sha256": _file_sha(n),
                    "language": _okf.language(n["path"]) if hasattr(_okf, "language") else "python",
                    "status": n["status"], "locked": n["locked"], "attestations": n["verified"]} for n in nodes],
         "envelopes": envelopes,

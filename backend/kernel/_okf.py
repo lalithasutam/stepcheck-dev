@@ -57,13 +57,13 @@ def harvest_invariants(source: str) -> list[str]:
 
 
 PERF = {"analysis_full": 0, "analysis_incremental": 0, "analysis_memory_hits": 0, "analysis_disk_hits": 0,
-        "symbols_remined": 0}
+        "symbols_remined": 0, "full_parses": 0, "stitched": 0}
 # Content-addressed facts: (path, sha256(path + source)) -> (exports, preserved_base, manual, mined, called).
 # Everything in it is a pure function of the file's text; what depends on the rest of the
 # project (deps, `call:<imported>` preserved symbols) is recomputed on every call.
 _CONTENT_CACHE: dict[str, tuple] = {}
 _CONTENT_CACHE_MAX = 1024
-RULES_VERSION = "36b"  # salt for the on-disk cache: a mining-rule or layout change invalidates it
+RULES_VERSION = "37b"  # salt for the on-disk cache: a mining-rule or layout change invalidates it
 CACHE_DIR: Path | None = None  # the root's .stepcheck/cache/analysis, pointed at by the kernel
 CACHE_WRITABLE = False
 _CALL_OWNER_RE = re.compile(r"^call:([A-Za-z_]\w*)\(")
@@ -182,41 +182,168 @@ def top_level_segments(tree: ast.Module, source: str) -> tuple[dict[str, str], s
     def mark(buf: bytearray, start: int, end: int) -> None:
         buf[start: end + 1] = b"\x01" * (end - start + 1)
 
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            start, end = _symbol_span(lines, node)
-            segs[node.name] = segs.get(node.name, "") + text(start, end)
+    table = segment_table(tree, source)  # spans from the table: a stitched tree's node line numbers are stale
+    members_of: dict[str, bytearray] = {}
+    for key, start, end, kind, _pos in table:
+        if kind == "def":
+            segs[key] = segs.get(key, "") + text(start, end)
             mark(covered, start, end)
-        elif isinstance(node, ast.ClassDef):
-            start, end = _symbol_span(lines, node)
+        elif kind == "class":
             mark(covered, start, end)
-            members = bytearray(len(lines) + 2)
-            for m in node.body:
-                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    ms, me = _symbol_span(lines, m)
-                    key = f"{node.name}.{m.name}"
-                    segs[key] = segs.get(key, "") + text(ms, me)
-                    mark(members, ms, me)
+            members_of[key] = bytearray(len(lines) + 2)
+        else:  # method
+            segs[key] = segs.get(key, "") + text(start, end)
+            owner = key.rsplit(".", 1)[0]
+            mark(members_of.setdefault(owner, bytearray(len(lines) + 2)), start, end)
+    for key, start, end, kind, _pos in table:
+        if kind == "class":
+            members = members_of[key]
             shell = "".join(lines[i - 1] for i in range(start, end + 1) if not members[i])
-            segs[node.name] = segs.get(node.name, "") + shell
+            segs[key] = segs.get(key, "") + shell
     rest = "".join(lines[i - 1] for i in range(1, len(lines) + 1) if not covered[i])
     return segs, rest
 
 
 _PARSE_CACHE: dict[int, ast.Module] = {}
 _SCOPE_CACHE: dict[tuple[int, int], tuple[set[str] | None, list[str]]] = {}
+# hash(source) -> segment table: [(key, start, end, kind)] with 1-based inclusive line spans,
+# kind "def" (top-level def), "class" (whole class span) or "method" (`Class.m`). A stitched
+# tree (`stitch`) carries stale line numbers on its reused nodes, so spans are read here.
+_SEGMENT_TABLES: dict[int, list[tuple[str, int, int, str]]] = {}
+
+
+def _lru_put(cache: dict, key, value, limit: int = 16) -> None:
+    if len(cache) >= limit:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
 
 
 def parse_cached(source: str) -> ast.Module:
     """`ast.parse` memoized on the text (a handful of entries): one commit parses the
-    module the session holds in Gate A, Gate B and the edit scope alike."""
+    module the session holds in Gate A, Gate B and the edit scope alike. A tree put
+    here by `stitch` has stale line numbers on reused nodes; `_SEGMENT_TABLES`
+    carries the spans instead."""
     key = hash(source)
     tree = _PARSE_CACHE.get(key)
     if tree is None:
         tree = ast.parse(source)
-        if len(_PARSE_CACHE) >= 16:
-            _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
-        _PARSE_CACHE[key] = tree
+        PERF["full_parses"] += 1
+        _lru_put(_PARSE_CACHE, key, tree)
+    return tree
+
+
+def segment_table(tree: ast.Module, source: str) -> list[tuple[str, int, int, str]]:
+    """The segment spans of `source`: from the table when one is known for this text,
+    else from the (freshly parsed) tree's line numbers."""
+    key = hash(source)
+    table = _SEGMENT_TABLES.get(key)
+    if table is not None:
+        return table
+    lines = source.splitlines(keepends=True)
+    table = []
+    for i, node in enumerate(tree.body):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start, end = _symbol_span(lines, node)
+            table.append((node.name, start, end, "def", (i,)))
+        elif isinstance(node, ast.ClassDef):
+            start, end = _symbol_span(lines, node)
+            table.append((node.name, start, end, "class", (i,)))
+            for j, m in enumerate(node.body):
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    ms, me = _symbol_span(lines, m)
+                    table.append((f"{node.name}.{m.name}", ms, me, "method", (i, j)))
+    _lru_put(_SEGMENT_TABLES, key, table)
+    return table
+
+
+def _common_window(old: list[str], new: list[str]) -> tuple[int, int, int]:
+    """(p, q, delta): the changed window is old[p : len(old)-q] -> new[p : len(new)-q]."""
+    p = 0
+    limit = min(len(old), len(new))
+    while p < limit and old[p] == new[p]:
+        p += 1
+    q = 0
+    while q < limit - p and old[len(old) - 1 - q] == new[len(new) - 1 - q]:
+        q += 1
+    return p, q, len(new) - len(old)
+
+
+def stitch(prev_source: str, new_source: str) -> ast.Module | None:
+    """A tree for `new_source` built without parsing the whole module: when the edit
+    from `prev_source` is confined to one top-level def or one method, that block
+    alone is parsed (standalone, dedented for a method) and spliced into the
+    previous tree, whose other nodes are reused as they are. The result is cached
+    as the parse of `new_source` together with its segment table, so the next
+    commit can stitch again. None when the previous tree is not cached, the edit
+    touches the module level, a class shell or several segments, or the block does
+    not parse as definitions only (the caller then parses the module in full).
+    A SyntaxError inside the edited block propagates: it is a Gate A verdict."""
+    prev_tree = _PARSE_CACHE.get(hash(prev_source))
+    if prev_tree is None or prev_source == new_source:
+        return None
+    table = segment_table(prev_tree, prev_source)
+    old_lines, new_lines = prev_source.splitlines(keepends=True), new_source.splitlines(keepends=True)
+    p, q, delta = _common_window(old_lines, new_lines)
+    w_start, w_end = p + 1, len(old_lines) - q  # 1-based inclusive old window; empty when w_end < w_start
+    if w_end < w_start:  # a pure insertion: it must fall strictly inside one segment to be local
+        w_end = w_start
+    hit = [t for t in table if t[1] <= w_start and w_end <= t[2] and t[3] in ("def", "method")]
+    if len(hit) != 1:
+        return None  # no definition contains the whole window, or two do (nested spans): not a local edit
+    key, s_start, s_end, kind, where = hit[0]
+    block = "".join(new_lines[s_start - 1: s_end + delta])
+    if kind == "method":
+        indent = len(block) - len(block.lstrip(" \t"))
+        text = "\n".join(line[indent:] if line[:indent].strip() == "" else line for line in block.split("\n"))
+        if any(line and not line.startswith(" " * indent if " " in block[:indent] else "\t" * indent) and line.strip()
+               for line in block.split("\n")[1:] if line.strip() and not line.startswith(block[:indent])):
+            return None  # a line dedented below the method's indentation: not a local edit
+    else:
+        text = block
+    parsed = ast.parse(text)  # SyntaxError here is the edit's own
+    if not parsed.body or not all(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for n in parsed.body):
+        return None
+    new_defs = parsed.body
+    import copy
+
+    body = list(prev_tree.body)
+    block_lines = text.splitlines(keepends=True)
+    if kind == "def":
+        body[where[0]: where[0] + 1] = new_defs  # by position: overload sets repeat a name
+    else:
+        shell = copy.copy(body[where[0]])
+        shell.body = list(shell.body)
+        shell.body[where[1]: where[1] + 1] = new_defs
+        body[where[0]] = shell
+    tree = ast.Module(body=body, type_ignores=list(getattr(prev_tree, "type_ignores", [])))
+    # the new table: entries before the window unchanged, the edited block's spans from its own
+    # parse, entries after the window shifted by delta (a class span containing the window grows);
+    # positions after the splice move by the number of definitions the block gained or lost
+    grew = len(new_defs) - 1
+    new_table: list[tuple] = []
+    for t in table:
+        k, a, b, kd, pos = t
+        if kd == "class" and a <= w_start and w_end <= b:
+            new_table.append((k, a, b + delta, kd, pos))
+        elif b < w_start:
+            new_table.append(t)
+        elif t == hit[0]:
+            offset = s_start - 1
+            for n_i, n in enumerate(new_defs):
+                ns, ne = _symbol_span(block_lines, n)
+                new_pos = (pos[0] + n_i,) if kind == "def" else (pos[0], pos[1] + n_i)
+                new_table.append((f"{key.rsplit('.', 1)[0]}.{n.name}" if kind == "method" else n.name, ns + offset, ne + offset, kind, new_pos))
+        elif a > w_end:
+            if kind == "def":
+                new_pos = (pos[0] + grew,) + pos[1:]
+            else:
+                new_pos = (pos[0], pos[1] + grew) if (len(pos) == 2 and pos[0] == where[0]) else pos
+            new_table.append((k, a + delta, b + delta, kd, new_pos))
+        else:
+            return None  # overlapping an edge of the window: not a clean splice
+    PERF["stitched"] += 1
+    _lru_put(_PARSE_CACHE, hash(new_source), tree)
+    _lru_put(_SEGMENT_TABLES, hash(new_source), new_table)
     return tree
 
 
@@ -264,7 +391,43 @@ def _edit_scope(previous_source: str | None, source: str, tree: ast.Module) -> t
             changed |= {k for k in new_segs if k.startswith(key + ".")}
     names = sorted({k.split(".")[-1] for k in changed})
     pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+    lines = source.splitlines(keepends=True)
+    for _name, node in rest_symbols(tree).items():
+        # a def or class nested in a module-level `try:` / `if sys.platform …:` / `with` block
+        # is not a segment; when its text names a changed symbol, everything is in scope
+        if pattern.search("".join(lines[node.lineno - 1: node.end_lineno])):
+            return None, order
     return {k for k, t in new_segs.items() if k in changed or pattern.search(t)}, order
+
+
+_COMPOUND = (ast.If, ast.Try, ast.With, ast.For, ast.While)
+if hasattr(ast, "TryStar"):
+    _COMPOUND = _COMPOUND + (ast.TryStar,)
+if hasattr(ast, "Match"):
+    _COMPOUND = _COMPOUND + (ast.Match,)
+
+
+def rest_symbols(tree: ast.Module) -> dict[str, ast.stmt]:
+    """Defs and classes that live in the module-level remainder rather than in a segment:
+    conditional definitions nested in top-level compound statements (`try: … except
+    ImportError:` fallbacks, `if sys.platform == "win32":` variants, `with`, `match`),
+    at any depth of such nesting. name -> the (last) definition."""
+    out: dict[str, ast.stmt] = {}
+
+    def walk(stmts) -> None:
+        for s in stmts:
+            if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out[s.name] = s
+            elif isinstance(s, _COMPOUND):
+                for field in ("body", "orelse", "finalbody"):
+                    walk(getattr(s, field, None) or [])
+                for h in getattr(s, "handlers", None) or []:
+                    walk(h.body)
+                for c in getattr(s, "cases", None) or []:
+                    walk(c.body)
+
+    walk(s for s in tree.body if isinstance(s, _COMPOUND))
+    return out
 
 
 def mined_owner(inv: str, keys: set[str] | None = None) -> str | None:
@@ -321,6 +484,14 @@ def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manu
         return _dedup_mined(list(previous.mined_invariants), manual)
     PERF["symbols_remined"] += len(affected)
     keys = set(order)
+    # Owners that were segments before the edit: an invariant whose owner was one and is no
+    # longer (the symbol was deleted) is not carried. An owner that was never a segment — a
+    # def nested in a module-level `try:` / `if:` block — lives in the remainder, which this
+    # path has established as unchanged, so its invariants are carried as they are.
+    try:
+        old_keys = set(top_level_segments(parse_cached(previous.source), previous.source)[0])
+    except (SyntaxError, ValueError, RecursionError):
+        return None
     fresh = (mine_guard_invariants(tree, only=affected), mine_branch_invariants(tree, only=affected),
              mine_structural_guards(tree, only=affected))
     old: tuple[list[str], list[str], list[str]] = ([], [], [])
@@ -331,7 +502,10 @@ def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manu
         by_owner: dict[str, list[str]] = {}
         for inv in old_group:
             owner = mined_owner(inv, keys)
-            if owner is not None and owner in keys and not in_scope(owner, affected):
+            if owner is None:
+                continue
+            in_remainder = owner not in keys and owner not in old_keys
+            if in_remainder or (owner in keys and not in_scope(owner, affected)):
                 by_owner.setdefault(owner, []).append(inv)
         for inv in fresh_group:
             owner = mined_owner(inv, keys)
@@ -345,7 +519,7 @@ def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manu
 
 
 def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str], *,
-            previous: ModuleInfo | None = None) -> ModuleInfo:
+            previous: ModuleInfo | None = None, tree: ast.Module | None = None) -> ModuleInfo:
     """Parse one module into its OKF facts. Raises SyntaxError on broken source.
     `previous` (the same file's last analysis) makes the mining incremental: only the
     top-level symbols the edit can affect are re-mined; the content-addressed cache
@@ -362,7 +536,8 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     _mod = lang_module(path)
     if _mod is not None:
         return _mod.analyze(node_id, path, source, project_modules)
-    tree = ast.parse(source)
+    if tree is None:
+        tree = parse_cached(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
     key = _content_key(path, source)
     facts = _recall(key)
@@ -377,8 +552,8 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
         if mined is None:
             PERF["analysis_full"] += 1
             mined = _dedup_mined(mine_guard_invariants(tree) + mine_branch_invariants(tree) + mine_structural_guards(tree), manual)
-        called = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        facts = (exports, preserved_base, manual, mined, called, import_statements(tree))
+        called, statements = _call_and_import_facts(tree, source)
+        facts = (exports, preserved_base, manual, mined, called, statements)
         _remember(key, facts)
     exports, preserved_base, manual, mined, called, statements = facts
 
@@ -405,10 +580,14 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
 
 
 def statement_count(source: str, tree: ast.Module | None = None) -> int:
-    _mod = foreign_module(source)
-    if _mod is not None:
-        return _mod.statement_count(source)
     key = hash(source)
+    if tree is None:  # a parsed tree is Python by construction; otherwise detect the language first
+        cached = _STMT_COUNT_CACHE.get(key)
+        if cached is not None:
+            return cached
+        _mod = foreign_module(source)
+        if _mod is not None:
+            return _mod.statement_count(source)
     cached = _STMT_COUNT_CACHE.get(key)
     if cached is not None:
         return cached
@@ -586,18 +765,15 @@ def pragma_frame(info: ModuleInfo, status: str, locked: bool, invariants: int, b
 
 
 def index_markdown(nodes: dict[str, "object"]) -> str:
-    """nodes: node_id -> Node (duck-typed: .status, .info.deps)."""
+    """nodes: node_id -> Node (duck-typed: .status, .deps — no analysis is forced)."""
     edges = [
         f"{nid} -> {dep}"
         for nid, node in sorted(nodes.items())
-        for dep in node.info.deps
+        for dep in (getattr(node, "deps", None) if getattr(node, "deps", None) is not None else node.info.deps)
     ]
-    meta = {
-        "node_id": "__index__",
-        "nodes": sorted(nodes),
-        "edges": edges,
-    }
-    fm = yaml.safe_dump(meta, sort_keys=False, default_flow_style=False)
+    # The same document yaml.safe_dump(meta, sort_keys=False) writes, emitted directly: the
+    # emitter spends seconds on a 3,000-node / 12,000-edge index, this spends milliseconds.
+    fm = "node_id: __index__\n" + _yaml_str_list("nodes", sorted(nodes)) + _yaml_str_list("edges", edges)
     lines = [f"- {nid} ({node.status})" for nid, node in sorted(nodes.items())]
     edge_lines = [f"- {e}" for e in edges]
     return (
@@ -609,6 +785,17 @@ def index_markdown(nodes: dict[str, "object"]) -> str:
     )
 
 
+_PLAIN_YAML = re.compile(r"^[A-Za-z_][\w.]*(?: -> [A-Za-z_][\w.]*)?$")
+
+
+def _yaml_str_list(key: str, items: list[str]) -> str:
+    """`key:` followed by one `- item` line per string, as YAML. A node id or edge is a
+    plain scalar; anything else is written as a JSON string, which YAML reads as is."""
+    if not items:
+        return f"{key}: []\n"
+    return f"{key}:\n" + "".join(f"- {s if _PLAIN_YAML.match(s) else json.dumps(s)}\n" for s in items)
+
+
 def _frame_describes_disk(okf_dir: Path, nid: str, node, root: Path) -> bool:
     """True when the frame already on disk is VERIFIED with an attestation that
     hashes to the tracked file's current bytes while this session's own view of
@@ -617,7 +804,7 @@ def _frame_describes_disk(okf_dir: Path, nid: str, node, root: Path) -> bool:
     import hashlib
 
     try:
-        disk = hashlib.sha256((root / node.info.path).read_bytes()).hexdigest()
+        disk = hashlib.sha256((root / getattr(node, "path", None) or node.info.path).read_bytes()).hexdigest()
         mine = node.verified[-1]["payload"]["sha256"] if node.verified else None
         if mine == disk:
             return False
@@ -646,9 +833,11 @@ def write_frames(
 
     okf_dir.mkdir(parents=True, exist_ok=True)
     previous = written or {}
+    # A lazy node (never analysed in this session) has no frame to render yet; a frame
+    # left by an earlier session for that path is kept as it is.
     pages = {
         nid: frame_markdown(node.info, node.status, node.locked, node.verified)
-        for nid, node in nodes.items()
+        for nid, node in nodes.items() if getattr(node, "materialized", True)
     }
     pages["__index__"] = index_markdown(nodes)
     shas: dict[str, str] = {}
@@ -907,8 +1096,8 @@ def skeleton(source: str, focus: list[str], *, elide_methods: bool = False, comp
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if stmt.name in keep:
                 out.append("\n\n" + _segment(lines, stmt))
-            elif focused:  # editing view: signatures only
-                out.append("\n\n" + _skeleton_def(stmt, doc=None))
+            elif focused:  # editing view: signatures only; the budget rung drops private parameters
+                out.append("\n\n" + (_def_stub(stmt) if compact >= 1 and stmt.name.startswith("_") else _skeleton_def(stmt, doc=None)))
             elif compact >= 2 or (compact == 1 and stmt.name.startswith("_")):
                 out.append("\n\n" + _def_stub(stmt))
             else:  # orientation view: summary lines too
@@ -1551,10 +1740,33 @@ def module_name(path: str) -> str:
     return ".".join(parts)
 
 
+ROOT_PACKAGE: str | None = None  # the root's own package name when the project root holds an __init__.py
+
+
+def set_root_package(name: str | None) -> None:
+    """Pointed by the kernel per session (like `set_cache`): a session opened on a package
+    directory — `django/` — imports as that package, so `http/__init__.py` is `django.http`
+    (not the standard library's `http`) and `from django import forms` reaches `forms/`."""
+    global ROOT_PACKAGE
+    ROOT_PACKAGE = name or None
+
+
+def rooted_name(path: str) -> str:
+    """`module_name`, prefixed with the root package when the root is itself a package."""
+    name = module_name(path)
+    if not ROOT_PACKAGE:
+        return name
+    return ROOT_PACKAGE if name == "__init__" else f"{ROOT_PACKAGE}.{name}"
+
+
 def _package_of(path: str) -> str:
-    """Dotted package a file lives in (`pkg/__init__.py` and `pkg/x.py` -> `pkg`)."""
+    """Dotted package a file lives in (`pkg/__init__.py` and `pkg/x.py` -> `pkg`), under
+    the root package when there is one."""
     parts = strip_suffix(path.replace("\\", "/")).split("/")
-    return ".".join(parts[:-1])
+    pkg = ".".join(parts[:-1])
+    if ROOT_PACKAGE:
+        return f"{ROOT_PACKAGE}.{pkg}" if pkg else ROOT_PACKAGE
+    return pkg
 
 
 def module_map(paths: dict[str, str]) -> dict[str, str]:
@@ -1570,8 +1782,20 @@ def module_map(paths: dict[str, str]) -> dict[str, str]:
     `utils/json.py` must not capture `import json`."""
     import sys
 
-    out = {module_name(p): nid for nid, p in paths.items()}
+    cache_key = (ROOT_PACKAGE, tuple(sorted(paths.items())))  # Gate A asks for the same project's map once per node
+    cached = _MODULE_MAP_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+    out = {rooted_name(p): nid for nid, p in paths.items()}
     stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    if ROOT_PACKAGE:
+        # the package directory may sit on sys.path as well (`backend/` here is both the
+        # package `backend` and a source root): its root-relative names stay as aliases,
+        # except where the standard library owns the top-level name (`http/` under `django/`)
+        for nid, p in paths.items():
+            name = module_name(p)
+            if name != "__init__" and name.split(".")[0] not in stdlib:
+                out.setdefault(name, nid)
     candidates: dict[str, set[str]] = {}
     for nid, p in paths.items():
         parts = p.replace("\\", "/").split("/")
@@ -1585,7 +1809,11 @@ def module_map(paths: dict[str, str]) -> dict[str, str]:
     for name, nids in candidates.items():
         if len(nids) == 1:
             out.setdefault(name, next(iter(nids)))
+    _lru_put(_MODULE_MAP_CACHE, cache_key, dict(out), 8)
     return out
+
+
+_MODULE_MAP_CACHE: dict[tuple, dict[str, str]] = {}
 
 
 def _lookup(dotted: str, modules: dict[str, str]) -> tuple[str | None, bool]:
@@ -1614,13 +1842,158 @@ def import_statements(tree: ast.Module) -> list[list]:
     or `["from", level, module, [[name, asname], …]]` — the content-only half of
     `_import_records`, so it can live in the analysis cache."""
     out: list[list] = []
-    for stmt in ast.walk(tree):
-        if isinstance(stmt, ast.Import):
-            for alias in stmt.names:
+    for n in _statements(tree.body):  # imports are statements: no expression node is visited
+        if isinstance(n, ast.Import):
+            for alias in n.names:
                 out.append(["import", alias.name, alias.asname])
-        elif isinstance(stmt, ast.ImportFrom):
-            out.append(["from", stmt.level or 0, stmt.module, [[a.name, a.asname] for a in stmt.names]])
+        elif isinstance(n, ast.ImportFrom):
+            out.append(["from", n.level or 0, n.module, [[a.name, a.asname] for a in n.names]])
     return out
+
+
+_STMT_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
+
+
+def _statements(nodes):
+    """Every statement under `nodes`, at any nesting depth, in source order."""
+    stack = list(reversed(nodes))
+    while stack:
+        n = stack.pop()
+        yield n
+        for field in _STMT_FIELDS:
+            children = getattr(n, field, None)
+            if children:
+                stack.extend(reversed(children))
+
+
+def _walk_facts(nodes) -> tuple[set[str], list[list]]:
+    """(names called as plain `name(...)`, import statements) under the given statements."""
+    called: set[str] = set()
+    statements: list[list] = []
+    for top in nodes:
+        for n in ast.walk(top):
+            if isinstance(n, ast.Call):
+                if isinstance(n.func, ast.Name):
+                    called.add(n.func.id)
+            elif isinstance(n, ast.Import):
+                for alias in n.names:
+                    statements.append(["import", alias.name, alias.asname])
+            elif isinstance(n, ast.ImportFrom):
+                statements.append(["from", n.level or 0, n.module, [[a.name, a.asname] for a in n.names]])
+    return called, statements
+
+
+_SEGMENT_FACTS: dict[tuple[int, int], tuple[frozenset, list]] = {}  # (hash, len) of a segment's text -> facts
+
+
+def _call_and_import_facts(tree: ast.Module, source: str) -> tuple[set[str], list[list]]:
+    """The module's called names and import statements, assembled per top-level segment:
+    a def or class whose text is the one already walked (a one-function commit leaves
+    every other segment's text as it was) is read from a small cache instead of being
+    walked again, so this step costs the edited segment, not the module."""
+    table = segment_table(tree, source)
+    lines = source.splitlines(keepends=True)
+    called: set[str] = set()
+    statements: list[list] = []
+    covered: set[int] = set()
+
+    def cached(text: str, nodes) -> None:
+        nonlocal called, statements
+        ck = (hash(text), len(text))
+        hit = _SEGMENT_FACTS.get(ck)
+        if hit is None:
+            c, s = _walk_facts(nodes)
+            hit = (frozenset(c), s)
+            _lru_put(_SEGMENT_FACTS, ck, hit, 8192)
+        called |= hit[0]
+        statements += hit[1]
+
+    for _key, start, end, kind, pos in table:
+        if kind == "def":
+            covered.add(pos[0])
+            cached("".join(lines[start - 1:end]), [tree.body[pos[0]]])
+        elif kind == "class":
+            # a class is its shell (decorators, bases, attributes, nested classes) plus one
+            # cached unit per method, so editing one method of a 90-method class re-walks that method
+            covered.add(pos[0])
+            cls = tree.body[pos[0]]
+            cut: set[int] = set()
+            for _mk, ms, me, mkind, mpos in table:
+                if mkind == "method" and mpos[0] == pos[0]:
+                    cut.update(range(ms, me + 1))
+                    cached("".join(lines[ms - 1:me]), [cls.body[mpos[1]]])
+            shell_nodes = [*cls.decorator_list, *cls.bases, *cls.keywords,
+                           *[s for s in cls.body if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]]
+            cached("".join(lines[i - 1] for i in range(start, end + 1) if i not in cut), shell_nodes)
+    c, s = _walk_facts([n for i, n in enumerate(tree.body) if i not in covered])
+    return called | c, statements + s
+
+
+# Parse-once facts for `stepcheck ci`: (path, hash(source), len(source)) -> (bound top-level
+# names, whether the module star-imports, import statements, hand-written invariants). The
+# ci parse phase fills it from the one parse it makes; Gate A and `resolve_imports` then
+# need no tree for a module the phase has seen.
+_LIGHT_FACTS: dict[tuple[str, int, int], tuple[set[str], bool, list[list], list[str]]] = {}
+
+
+def light_facts(path: str, source: str):
+    return _LIGHT_FACTS.get((path.replace("\\", "/"), hash(source), len(source)))
+
+
+def remember_light_facts(path: str, source: str, facts: tuple) -> None:
+    _lru_put(_LIGHT_FACTS, (path.replace("\\", "/"), hash(source), len(source)), facts, 8192)
+
+
+_IMPORT_LINE = re.compile(r"^\s*(?:from\s+(?P<from>[.\w]+)\s+import\s+(?P<names>.+)|import\s+(?P<mods>[\w.,\s]+))$")
+_IMPORT_START = re.compile(r"^[ \t]*(?:from|import)[ \t]", re.M)
+
+
+def regex_import_statements(source: str) -> list[list]:
+    """`import_statements` from a line scan, no parse: the import edges of a lazily indexed
+    module. Parenthesised and backslash-continued name lists are joined first; a line
+    that is not an import contributes nothing, so the result is a superset-safe
+    approximation the analysis replaces on first use."""
+    out: list[list] = []
+    for start_match in _IMPORT_START.finditer(source):  # only the import lines are visited, at C speed
+        start = start_match.start()
+        end = source.find("\n", start)
+        end = len(source) if end < 0 else end
+        stripped = source[start:end].strip()
+        while stripped.count("(") > stripped.count(")") or stripped.endswith("\\"):
+            # a parenthesised or backslash-continued name list: join the following lines
+            if end >= len(source):
+                break
+            nxt = source.find("\n", end + 1)
+            nxt = len(source) if nxt < 0 else nxt
+            stripped = stripped.rstrip("\\").rstrip() + " " + source[end + 1:nxt].strip()
+            end = nxt
+        text = stripped.replace("(", " ").replace(")", " ").split("#", 1)[0].strip()
+        m = _IMPORT_LINE.match(text)
+        if not m:
+            continue
+        if m.group("from") is not None:
+            dotted = m.group("from")
+            level = len(dotted) - len(dotted.lstrip("."))
+            module = dotted[level:] or None
+            names = []
+            for part in m.group("names").split(","):
+                bits = part.split()
+                if bits:
+                    names.append([bits[0], bits[2] if len(bits) >= 3 and bits[1] == "as" else None])
+            if names:
+                out.append(["from", level, module, names])
+        else:
+            for part in m.group("mods").split(","):
+                bits = part.split()
+                if bits:
+                    out.append(["import", bits[0], bits[2] if len(bits) >= 3 and bits[1] == "as" else None])
+    return out
+
+
+def frame_source(frame_text: str) -> str | None:
+    """The source a frame on disk carries (its last fenced block), or None."""
+    blocks = re.findall(r"^```(?:python|ts|go|rust|java)?\n(.*?)^```", frame_text, re.S | re.M)
+    return blocks[-1] if blocks else None
 
 
 def _records_from(node_id: str, path: str, statements: list[list], modules: dict[str, str]) -> list[tuple[str, str | None, str | None]]:
@@ -1660,21 +2033,36 @@ def _records_from(node_id: str, path: str, statements: list[list], modules: dict
     return out
 
 
+_RESOLVE_CACHE: dict[tuple, tuple] = {}  # (node_id, path, hash(source)) -> (source, modules, result)
+
+
 def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str]) -> dict[str, set[str]]:
     """Dependency node_id -> names this module imports from it (empty when it
-    imports the module object itself). Unparseable source resolves to nothing."""
+    imports the module object itself). Unparseable source resolves to nothing.
+    Memoized on the text and the module map: Gate A asks this of every dependent on
+    every commit, and a dependent's imports do not change between its own commits."""
     _mod = lang_module(path)
     if _mod is not None:
         return _mod.resolve_imports(node_id, path, source, modules)
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return {}
+    key = (node_id, path, hash(source))
+    hit = _RESOLVE_CACHE.get(key)
+    if hit is not None and (hit[0] is source or hit[0] == source) and hit[1] == modules:
+        return {nid: set(names) for nid, names in hit[2].items()}
+    light = light_facts(path, source)
+    if light is not None:  # the ci parse phase already read this module's imports
+        records = _records_from(node_id, path, light[2], modules)
+    else:
+        try:
+            tree = parse_cached(source)
+        except (SyntaxError, ValueError):
+            return {}
+        records = _import_records(node_id, path, tree, modules)
     out: dict[str, set[str]] = {}
-    for nid, name, _local in _import_records(node_id, path, tree, modules):
+    for nid, name, _local in records:
         out.setdefault(nid, set())
         if name is not None:
             out[nid].add(name)
+    _lru_put(_RESOLVE_CACHE, key, (source, dict(modules), {nid: set(names) for nid, names in out.items()}), 4096)
     return out
 
 
@@ -1974,17 +2362,30 @@ def is_generated_path(rel: str) -> bool:
     (`dist`, `build`, `out`, `target`, `.next`), `vendor/` and `node_modules/`."""
     rel = rel.replace("\\", "/")
     parts = rel.split("/")
-    if any(part in _EXCLUDED_DIRS_ALL or part == "migrations" or part.startswith(".") for part in parts[:-1]):
+    if any(part in _EXCLUDED_DIRS_ALL or part.startswith(".") for part in parts[:-1]):
         return True
     return bool(_GENERATED_FILE_RE.search(parts[-1]))
+
+
+_NUMBERED_MIGRATION = re.compile(r"^\d{4}_\w+\.py$")
+
+
+def _migration_dirs(rels: list[str]) -> set[str]:
+    """Directories holding generated Django migrations: a `migrations/` directory with a
+    numbered `0001_initial.py`-style file in it. Django's own `db/migrations/` package —
+    the migration framework — has none and stays tracked."""
+    out: set[str] = set()
+    for rel in rels:
+        head, _, name = rel.rpartition("/")
+        if head.rsplit("/", 1)[-1] == "migrations" and _NUMBERED_MIGRATION.match(name):
+            out.add(head)
+    return out
 
 
 def _git_visible(root: Path) -> set[str] | None:
     """Relative paths git would track or sees as untracked-but-not-ignored, or None when
     `root` is not inside a repository (or git is unavailable): the .gitignore fast path."""
-    if not (root / ".git").exists():
-        return None
-    try:
+    try:  # from a subdirectory of a repository git lists that subtree, relative to it; outside one it fails
         out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                              capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
@@ -2002,6 +2403,16 @@ def tracked_files(root: Path) -> list[Path]:
     (`is_generated_path`) and, inside a git repository, everything `.gitignore` hides."""
     visible = _git_visible(root)
     out = []
+    if visible is not None:
+        # git already walked the tree: one existence check per listed path instead of a
+        # stat for every entry under the root (a 3,000-file repository has 18,000 of them)
+        for rel in visible:
+            if language(rel) == "other" or is_generated_path(rel) or rel.rsplit("/", 1)[-1].startswith("."):
+                continue
+            p = root / rel
+            if p.is_file():
+                out.append(p)
+        return _without_migrations(root, sorted(out))
     for p in root.rglob("*"):
         if not p.is_file() or language(str(p)) == "other":
             continue
@@ -2011,7 +2422,15 @@ def tracked_files(root: Path) -> list[Path]:
         if visible is not None and rel not in visible:
             continue
         out.append(p)
-    return sorted(out)
+    return _without_migrations(root, sorted(out))
+
+
+def _without_migrations(root: Path, files: list[Path]) -> list[Path]:
+    rels = [str(p.relative_to(root)).replace("\\", "/") for p in files]
+    skip = _migration_dirs(rels)
+    if not skip:
+        return files
+    return [p for p, rel in zip(files, rels) if rel.rpartition("/")[0] not in skip]
 
 
 def _def_stub(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> str:

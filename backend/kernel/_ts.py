@@ -581,7 +581,7 @@ def resolve_imports(node_id: str, path: str, source: str, modules: dict[str, str
             return None
         joined = posixpath.normpath(posixpath.join(base, spec)) if base else posixpath.normpath(spec)
         for candidate in (joined, joined + "/index"):
-            nid = modules.get(_okf.module_name(candidate))
+            nid = modules.get(_okf.rooted_name(candidate))
             if nid is not None and nid != node_id:
                 return nid
         return None
@@ -655,13 +655,13 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> None:
     problem = syntax_problem(source)
     if problem:
         raise MechanicalError(f"invalid TypeScript syntax in '{node_id}': {problem}")
-    paths = {nid: n.info.path for nid, n in nodes.items()}
+    paths = {nid: n.path for nid, n in nodes.items()}
     modules = _okf.module_map(paths)
     bound = bound_names(source)
     for dep_id, dep_node in nodes.items():
-        if dep_id == node_id or node_id not in dep_node.info.deps:
+        if dep_id == node_id or node_id not in dep_node.deps:
             continue
-        required = resolve_imports(dep_id, dep_node.info.path, dep_node.info.source, modules).get(node_id, set())
+        required = resolve_imports(dep_id, dep_node.path, dep_node.source, modules).get(node_id, set())
         missing = sorted(n for n in required if n is not None and n not in bound)
         if missing:
             raise MechanicalError(
