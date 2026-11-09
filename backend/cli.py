@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -144,8 +145,19 @@ def _ci_parse(root: Path) -> list[tuple[str, str]]:
         try:
             ast.parse(source, filename=rel)
         except SyntaxError as exc:
+            if _NEWER_GRAMMAR.search(exc.text or "") or isinstance(exc, IndentationError) and "too many levels" in exc.msg:
+                # Valid under a newer Python (PEP 695 generics / `type` aliases) or past this
+                # parser's limits: the kernel leaves the file untracked, so it is reported, not failed.
+                _CI_UNPARSEABLE.append((rel, f"{exc.msg} (line {exc.lineno})"))
+                continue
             problems.append((rel, f"Gate A: invalid AST syntax: {exc.msg} (line {exc.lineno})"))
+        except (ValueError, RecursionError, MemoryError) as exc:
+            _CI_UNPARSEABLE.append((rel, f"{type(exc).__name__}: {str(exc)[:60]}"))
     return problems
+
+
+_CI_UNPARSEABLE: list[tuple[str, str]] = []
+_NEWER_GRAMMAR = re.compile(r"^\s*(type\s+\w+\s*(\[[^\]]*\])?\s*=|(class|def)\s+\w+\s*\[)")
 
 
 def _ci_frames(root: Path, live: dict[str, str]) -> tuple[list[tuple[str, str]], int]:
@@ -229,10 +241,15 @@ def cmd_ci(args: argparse.Namespace) -> int:
                     Path(args.report_out).write_text(text, encoding="utf-8", newline="\n")
         return 1
 
+    _CI_UNPARSEABLE.clear()
     problems = _ci_parse(root)
     if problems:
         return fail(problems, "parse")
-    print("  parse         every module parses")
+    if _CI_UNPARSEABLE:
+        print(f"  parse         every tracked module parses; {len(_CI_UNPARSEABLE)} file(s) this Python cannot parse are untracked "
+              f"(first: {_CI_UNPARSEABLE[0][0]} — {_CI_UNPARSEABLE[0][1][:80]})")
+    else:
+        print("  parse         every module parses")
 
     kernel = StateKernel(ephemeral=True)  # verification only: writes nothing, anywhere
     sid = kernel.init_session(root)

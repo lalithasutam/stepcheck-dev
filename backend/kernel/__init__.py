@@ -11,6 +11,7 @@ Everything in `_`-prefixed modules is implementation, never interface.
 """
 from __future__ import annotations
 
+import ast
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -225,14 +226,21 @@ class StateKernel:
 
     def init_session(self, project_root: str | Path) -> str:
         root = Path(project_root).resolve()
+        self._point_cache(root)
         files = _okf.tracked_files(root)
         loaded: dict[Path, tuple[str, bytes]] = {}
         for p in files:
             raw = p.read_bytes()
             try:
-                loaded[p] = (_okf.decode_source(raw), raw)
+                text = _okf.decode_source(raw)
             except UnicodeDecodeError:
                 continue  # not UTF-8: leave untracked, write-back could not round-trip it
+            if _okf.language(str(p)) == "python":
+                try:
+                    ast.parse(text)
+                except (SyntaxError, ValueError, RecursionError, MemoryError):
+                    continue  # a newer grammar, or past the parser's limits: untracked, never fatal to the index
+            loaded[p] = (text, raw)
         # A flat stem stays the node id while it is unique in the project; stems
         # that collide (several __init__.py, pkg/models.py + other/models.py)
         # use their dotted relative path instead of overwriting each other.
@@ -336,14 +344,16 @@ class StateKernel:
             sent_tokens = _tokens.count(source)
         assert source is not None
         source = source.replace("\r\n", "\n")  # canonical state is always LF
+        self._point_cache(s.root)
         try:
-            _gates.gate_a(node_id, node.locked, source, s.nodes)
-        except MechanicalError as exc:
-            return self._reject(s, node, "A", exc, dry_run=dry_run)
+            tree = _gates.gate_a(node_id, node.locked, source, s.nodes)
+        except (MechanicalError, RecursionError, MemoryError) as exc:
+            return self._reject(s, node, "A", _as_mechanical(exc, node_id), dry_run=dry_run)
 
-        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s))
+        staged_info = _okf.analyze(node_id, node.info.path, source, self._modules(s), previous=node.info)
         try:
-            _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion, nodes=s.nodes)
+            _gates.gate_b(node, staged_info, node.info.source, source, allow_deletion, nodes=s.nodes,
+                          trees=_shared_trees(node.info.source, tree))
         except OmissionError as exc:
             return self._reject(s, node, "B", exc, dry_run=dry_run)
 
@@ -361,6 +371,7 @@ class StateKernel:
                 {nid: n.info.source for nid, n in s.nodes.items() if nid != node_id},
                 mined=node.info.mined_invariants,
                 project_paths={nid: n.info.path for nid, n in s.nodes.items()},
+                previous_source=node.info.source,
             )
         except LogicalError as exc:
             return self._reject(s, node, "C", exc, dry_run=dry_run)
@@ -482,6 +493,18 @@ class StateKernel:
             if sid is None:
                 raise KeyError(f"no StepCheck session is registered for {root}")
         return _compliance.bundle(self, sid)
+
+    def perf_stats(self) -> dict[str, int]:
+        """Process-wide counters of the work the analysis cache and the incremental
+        gates did and skipped: analysis_full / analysis_incremental / analysis_memory_hits
+        / analysis_disk_hits / symbols_remined, gate_c_sandbox_loads /
+        gate_c_probes_skipped / gate_c_symbols_checked."""
+        return {**_okf.PERF, **_gates.PERF}
+
+    def _point_cache(self, root: Path) -> None:
+        """Aim the content-addressed analysis cache at this project; an ephemeral
+        kernel reads it but writes nothing under the tree."""
+        _okf.set_cache(root / ".stepcheck" / "cache" / "analysis", writable=not self._ephemeral)
 
     def provenance(self, session_id: str, node_id: str) -> dict:
         """The node's latest attestation as an in-toto Statement v1 inside a DSSE
@@ -843,7 +866,7 @@ class StateKernel:
             # Same bytes, so a lock is not being violated: Gate A checks syntax
             # and the names this dependent's own dependents import.
             _gates.gate_a(dep_id, False, source, s.nodes)
-            staged = _okf.analyze(dep_id, dep.info.path, source, modules)
+            staged = _okf.analyze(dep_id, dep.info.path, source, modules, previous=dep.info)
             _gates.gate_b(dep, staged, source, source, False)
             _gates.gate_c(
                 dep_id,
@@ -1024,6 +1047,25 @@ def _session_from_json(data: dict) -> _Session:
         omissions_blocked=int(data.get("omissions_blocked", 0)),
         scratchpad=list(data.get("scratchpad", [])),
     )
+
+
+def _as_mechanical(exc: BaseException, node_id: str) -> MechanicalError:
+    """A Gate A verdict for whatever stopped the parser: its own MechanicalError, or the
+    interpreter's limits (recursion, memory) on a pathological file."""
+    if isinstance(exc, MechanicalError):
+        return exc
+    return MechanicalError(f"'{node_id}' is past the parser's limits: {type(exc).__name__}")
+
+
+def _shared_trees(held_source: str, staged_tree) -> tuple | None:
+    """(held tree, staged tree) for Gate B when both are Python: the held source is parsed
+    once per text (memoized) and shared with the edit scope; None for other languages."""
+    if not isinstance(staged_tree, ast.Module):
+        return None
+    try:
+        return _okf.parse_cached(held_source), staged_tree
+    except (SyntaxError, ValueError):
+        return None
 
 
 _IN_TOTO_PAYLOAD_TYPE = "application/vnd.in-toto+json"

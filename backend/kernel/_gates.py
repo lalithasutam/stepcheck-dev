@@ -98,7 +98,7 @@ def _def_bodies(tree: ast.Module) -> dict[str, list]:
     return out
 
 
-def _stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[str, str]]:
+def _stubbed_bodies(path: str, old_source: str, new_source: str, trees: tuple | None = None) -> list[tuple[str, str]]:
     """Defs whose real body the staged source turns into a skeleton stub — what a
     whole-file write copied from an OKF frame (unfocused bodies shown as `...`)
     does. Python: `...` / `pass` / docstring-only. TS/JS, Go, Rust, Java: a brace
@@ -108,7 +108,9 @@ def _stubbed_bodies(path: str, old_source: str, new_source: str) -> list[tuple[s
     if not str(path).endswith((".py", ".pyi")):
         return _foreign_stubbed_bodies(path, old_source, new_source)
     try:
-        old, new = _def_bodies(ast.parse(old_source)), _def_bodies(ast.parse(new_source))
+        old_tree = trees[0] if trees and trees[0] is not None else ast.parse(old_source)
+        new_tree = trees[1] if trees and trees[1] is not None else ast.parse(new_source)
+        old, new = _def_bodies(old_tree), _def_bodies(new_tree)
     except SyntaxError:
         return []
     return [(name, kind) for name, body in old.items()
@@ -207,7 +209,7 @@ def _foreign_stubbed_bodies(path: str, old_source: str, new_source: str) -> list
             and (kind := _foreign_stub_kind(new[name])) is not None]
 
 
-def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool, nodes=None) -> None:
+def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: bool, nodes=None, trees: tuple | None = None) -> None:
     """Omission detection: symbol fingerprinting, skeleton-stub body overwrites
     (a def whose real body became `...` / `pass` / docstring-only), and the
     mass-deletion guard.
@@ -237,7 +239,7 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
             subtype="INTRA_NODE_SYMBOL_DROPPED",
         )
 
-    stubbed = _stubbed_bodies(node.info.path, old_source, new_source)
+    stubbed = _stubbed_bodies(node.info.path, old_source, new_source, trees)
     if stubbed:
         name, stub = stubbed[0]
         raise OmissionError(
@@ -246,8 +248,8 @@ def gate_b(node, staged_info, old_source: str, new_source: str, allow_deletion: 
             subtype="INTRA_NODE_BODY_STUBBED",
         )
 
-    old_n = _okf.statement_count(old_source)
-    new_n = _okf.statement_count(new_source)
+    old_n = _okf.statement_count(old_source, trees[0] if trees else None)
+    new_n = _okf.statement_count(new_source, trees[1] if trees else None)
     if old_n and (old_n - new_n) / old_n > 0.15:
         lost = _lost_bindings(node.info.path, old_source, new_source)
         changed = sorted(set(node.info.exports) - set(staged_info.exports))
@@ -363,10 +365,12 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
 
     paths = {nid: n.info.path for nid, n in nodes.items()}
     modules = _okf.module_map(paths)
-    staged = _okf.analyze(node_id, paths.get(node_id, f"{node_id}.py"), source, modules)
-    bound = export_names(staged.exports) | _bound_names(tree)
+    exports, _preserved = _okf.top_level_facts(tree)  # the exports alone: no mining here
+    bound = export_names(exports) | _bound_names(tree)
     if "__getattr__" in bound:
         return tree
+    if _star_imports(tree):
+        return tree  # `from … import *` at the top level can serve any name a dependent imports
     for dep_id, dep_node in nodes.items():
         if dep_id == node_id or node_id not in dep_node.info.deps:
             continue
@@ -382,7 +386,14 @@ def gate_a(node_id: str, locked: bool, source: str, nodes) -> "ast.Module":
     return tree
 
 
+def _star_imports(tree: "ast.Module") -> bool:
+    """Whether the module re-exports with `from X import *` at its top level (a package
+    `__init__` that gathers its submodules' names): its exports cannot be listed statically."""
+    return any(isinstance(s, ast.ImportFrom) and any(a.name == "*" for a in s.names) for s in tree.body)
+
+
 _CALL_RE = re.compile(r"^call:(.+?)\s+raises\s+([A-Za-z_][\w.]*)\s*$")
+PERF = {"gate_c_sandbox_loads": 0, "gate_c_probes_skipped": 0, "gate_c_symbols_checked": 0}
 
 
 def _call_equals(inv: str) -> tuple[str, object] | None:
@@ -513,8 +524,15 @@ def gate_c(
     project_sources: dict[str, str] | None = None,
     mined: list[str] | None = None,
     project_paths: dict[str, str] | None = None,
+    previous_source: str | None = None,
 ) -> None:
     """Logical micro-invariants: every standing frame invariant must hold.
+
+    `previous_source` (the module as the session holds it) scopes the work to the
+    edit: a `call:` probe or a structural guard whose owning top-level symbol did
+    not change — and that names no changed symbol — is untouched by definition and
+    is not re-run; when the module level changed (imports, constants) everything
+    runs. Hand-written invariants always run.
 
     Each invariant is a deterministic Python expression evaluated with:
       src  — `ast.unparse(tree)`: whitespace/quote-normalized source with every
@@ -539,18 +557,31 @@ def gate_c(
     the full step + clock guard. A falsy result, or any exception, is a
     kernel.LogicalError.
     """
+    from . import _okf
+
     guard_invariants = [inv for inv in invariants if inv.startswith("guard:")]
     invariants = [inv for inv in invariants if not inv.startswith("guard:")]
+    path = (project_paths or {}).get(node_id, f"{node_id}.py")
+    tree = scope = None
+    if _okf.lang_module(path) is None:
+        tree = ast.parse(staged_source)
+        scope, _order = _okf.edit_scope(previous_source, staged_source, tree)  # None: everything is in scope
+    if scope is not None:
+        live = [inv for inv in invariants if (_okf.mined_owner(inv) is None) or _okf.in_scope(_okf.mined_owner(inv), scope)]
+        PERF["gate_c_probes_skipped"] += len(invariants) - len(live)
+        invariants = live
     if not invariants:
         # nothing to execute (foreign modules carry only guard invariants)
-        return _structural_guards(node_id, guard_invariants, staged_source, project_paths)
+        return _structural_guards(node_id, guard_invariants, staged_source, project_paths, tree=tree, scope=scope)
     from . import LogicalError, _sandbox
 
-    tree = ast.parse(staged_source)
+    if tree is None:
+        tree = ast.parse(staged_source)
     src = ast.unparse(tree)
     needs_ns = any(inv.startswith("call:") or re.search(r"\bns\b", inv) for inv in invariants)
     ns: dict | None = None
     if needs_ns:
+        PERF["gate_c_sandbox_loads"] += 1
         try:
             ns = _sandbox.guarded(
                 lambda: _sandbox.load_namespace(
@@ -634,31 +665,45 @@ def gate_c(
             raise LogicalError(
                 f"staged diff violates frame invariant {inv!r} of '{node_id}'{tag}"
             )
-    _structural_guards(node_id, guard_invariants, staged_source, project_paths)
+    _structural_guards(node_id, guard_invariants, staged_source, project_paths, tree=tree, scope=scope)
 
 
 def _structural_guards(node_id: str, guard_invariants: list[str], staged_source: str,
-                       project_paths: dict[str, str] | None) -> None:
+                       project_paths: dict[str, str] | None, *, tree: "ast.Module | None" = None,
+                       scope: set[str] | None = None) -> None:
     """Structural `guard:<symbol>:<clause>` invariants (Python, TypeScript, Go, Rust,
     Java): each mined guard clause must still exist in its symbol's body — anywhere
     in it, equal after normalisation — unless the commit declared the deletion.
-    Runs after the executable invariants, whose failures are more specific."""
+    Runs after the executable invariants, whose failures are more specific.
+    `scope` (Python): the top-level symbols the edit can affect — a guard whose symbol
+    is outside it is present by definition and is not re-checked."""
     if not guard_invariants:
         return
     from . import LogicalError, _okf
 
     path = (project_paths or {}).get(node_id, f"{node_id}.py")
-    present = _okf.present_guards(staged_source, path)
     python = _okf.lang_module(path) is None
+    if python and scope is not None:
+        guard_invariants = [inv for inv in guard_invariants if _okf.in_scope(inv.split(":", 2)[1], scope)]
+        PERF["gate_c_symbols_checked"] += len(scope)
+        if not guard_invariants:
+            return
+        present = _okf.present_structural_guards(tree if tree is not None else ast.parse(staged_source), only=scope)
+    else:
+        present = _okf.present_guards(staged_source, path)
+        if python:
+            PERF["gate_c_symbols_checked"] += len({inv.split(":", 2)[1].split(".")[0] for inv in guard_invariants})
     kind = "guard clause"
     # Python conditions are compared in canonical form (constants right, commuted
     # operands, `isinstance(x, (T,))`, negations pushed inward): an equivalent spelling
     # is the same guard. The stored clause keeps the spelling it was mined in.
     canon = canonical_guard if python else (lambda inv: inv)
     present_c = {canon(p) for p in present}
-    gone = _dead_roots({inv.split(":", 2)[1].split(".")[0] for inv in guard_invariants}, staged_source, path)
+    gone: set[str] | None = None  # the dead-code roots, computed only when a guard is missing
     for inv in guard_invariants:
         held = inv in present or canon(inv) in present_c
+        if not held and gone is None:
+            gone = _dead_roots({i.split(":", 2)[1].split(".")[0] for i in guard_invariants}, staged_source, path)
         if not held and (inv.split(":", 2)[1].split(".")[0] in gone
                          or _assert_waived(inv, staged_source, present, path)):
             continue  # its symbol was removed as dead code (Gate B vetted that), or an assert waiver

@@ -1,0 +1,89 @@
+{
+ "before": "slice35",
+ "after": "slice36",
+ "before_kernel": "4912e62",
+ "after_kernel": "4912e62",
+ "after_dirty": true,
+ "table": [
+  [
+   "Monolith files (15 files, 72,904 LOC): dry-run commit, one function edited",
+   "p50 1216.1 / p95 1850.1 / max 1929.7 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 453.1 / p95 873.0 / max 921.4 ms; <25 ms 0.0%, <50 ms 0.0%"
+  ],
+  [
+   "Monolith files: landed commit",
+   "p50 1285.4 / p95 1979.1 / max 2034.1 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 630.5 / p95 813.6 / max 1043.5 ms; <25 ms 0.0%, <50 ms 0.0%"
+  ],
+  [
+   "Monolith files: init_session",
+   "p50 396.1 / p95 559.1 / max 594.6 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 473.4 / p95 589.9 / max 628.8 ms; <25 ms 0.0%, <50 ms 0.0%"
+  ],
+  [
+   "Monolith files: focused checkout",
+   "p50 255.1 / p95 398.4 / max 404.9 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 449.1 / p95 615.4 / max 626.1 ms; <25 ms 0.0%, <50 ms 6.7%"
+  ],
+  [
+   "django package (881 files, 161,663 LOC): cold init_session",
+   "135.9 s (6.8 files/s)",
+   "89.9 s (9.8 files/s)"
+  ],
+  [
+   "django package: peak memory (tracemalloc / RSS)",
+   "58.9 MB / None MB",
+   "58.0 MB / None MB"
+  ],
+  [
+   "django package: in-process PreToolUse Edit hook on db/models/sql/query.py",
+   "p50 898.3 / p95 1100.1 / max 1100.1 ms; <25 ms 0.0%, <50 ms 0.0%",
+   "p50 355.7 / p95 444.3 / max 444.3 ms; <25 ms 0.0%, <50 ms 0.0%"
+  ],
+  [
+   "django package: PreToolUse Read hook",
+   "p50 3.2 / p95 97.3 / max 97.3 ms; <25 ms 66.7%, <50 ms 66.7%",
+   "p50 4.2 / p95 128.1 / max 128.1 ms; <25 ms 66.7%, <50 ms 66.7%"
+  ],
+  [
+   "django package: fresh-process session rehydrate",
+   "138.0 ms",
+   "128.2 ms"
+  ],
+  [
+   "django package: stepcheck ci cold / warm",
+   "107.2 s / 91.0 s, exit 1",
+   "55.9 s / 46.5 s, exit 1"
+  ],
+  [
+   "full django tree (2665 files, 499,624 LOC): cold init_session",
+   "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
+   "231.4 s (11.5 files/s)"
+  ],
+  [
+   "full django tree: peak memory / session file",
+   "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
+   "242.0 MB / 22.1 MB"
+  ],
+  [
+   "full django tree: PreToolUse Edit hook",
+   "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
+   "p50 625.2 / p95 700.7 / max 700.7 ms; <25 ms 0.0%, <50 ms 0.0%"
+  ],
+  [
+   "full django tree: stepcheck ci cold / warm",
+   "CRASH after 185.8 s: SyntaxError: invalid syntax (<unknown>, line 48)",
+   "9.7 s / 9.8 s, exit 1"
+  ],
+  [
+   "Noise tree (migrations, _pb2, .min.js, .d.ts, vendor, dist, build, .gitignored)",
+   "7 noise files tracked of 16 (2 gitignored), init 3237.2 ms",
+   "0 noise files tracked of 16 (0 gitignored), init 104.9 ms"
+  ],
+  [
+   "Resilience",
+   "nesting_120: crash; nesting_400: crash; circular+*: ok; BOM/CRLF: ok",
+   "nesting_120: untracked: past the parser's limits, index unaffected; nesting_400: untracked: past the parser's limits, index unaffected; circular+*: ok; BOM/CRLF: ok"
+  ]
+ ]
+}

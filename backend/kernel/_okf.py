@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import ast
 import codecs
+import hashlib
 import io
+import json
 import os
 import re
 import shutil
+import subprocess
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +43,8 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
 def harvest_invariants(source: str) -> list[str]:
     """`# okf-invariant: <python-expr over `src`>` comments, in file order."""
     found: list[str] = []
+    if "okf-invariant" not in source:
+        return found  # tokenizing a 10k-line module costs more than every other step of its analysis
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
             if tok.type == tokenize.COMMENT:
@@ -51,22 +56,75 @@ def harvest_invariants(source: str) -> list[str]:
     return found
 
 
-def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str]) -> ModuleInfo:
-    """Parse one module into its OKF facts. Raises SyntaxError on broken source.
-    `project_modules` maps importable dotted names to node ids (see module_map);
-    a plain set of flat module names is accepted for backwards compatibility.
-    Decorators are fingerprinted twice: once per module (`@name`) and once per
-    symbol (`@name on symbol`), so dropping `@fixture` from one function is an
-    omission even while a sibling still carries it. Method decorators are
-    fingerprinted per dotted symbol (`@width.setter on Box.width`). A decorator a
-    symbol carries more than once — `@overload` on each signature of an overload
-    set — is counted (`@overload on f x2`, `x3`, …), so losing one of the blocks
-    is an omission too."""
-    _mod = lang_module(path)
-    if _mod is not None:
-        return _mod.analyze(node_id, path, source, project_modules)
-    tree = ast.parse(source)
-    modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
+PERF = {"analysis_full": 0, "analysis_incremental": 0, "analysis_memory_hits": 0, "analysis_disk_hits": 0,
+        "symbols_remined": 0}
+# Content-addressed facts: (path, sha256(path + source)) -> (exports, preserved_base, manual, mined, called).
+# Everything in it is a pure function of the file's text; what depends on the rest of the
+# project (deps, `call:<imported>` preserved symbols) is recomputed on every call.
+_CONTENT_CACHE: dict[str, tuple] = {}
+_CONTENT_CACHE_MAX = 1024
+RULES_VERSION = "36b"  # salt for the on-disk cache: a mining-rule or layout change invalidates it
+CACHE_DIR: Path | None = None  # the root's .stepcheck/cache/analysis, pointed at by the kernel
+CACHE_WRITABLE = False
+_CALL_OWNER_RE = re.compile(r"^call:([A-Za-z_]\w*)\(")
+
+
+def set_cache(directory: Path | None, *, writable: bool) -> None:
+    """Point the analysis cache at a project (the kernel does this per session). An
+    ephemeral kernel reads a cache but never writes one."""
+    global CACHE_DIR, CACHE_WRITABLE
+    CACHE_DIR, CACHE_WRITABLE = directory, writable
+
+
+def _content_key(path: str, source: str) -> str:
+    return hashlib.sha256(f"{RULES_VERSION}\0{path}\0{source}".encode("utf-8")).hexdigest()[:32]
+
+
+def _remember(key: str, facts: tuple) -> None:
+    if len(_CONTENT_CACHE) >= _CONTENT_CACHE_MAX:
+        for stale in list(_CONTENT_CACHE)[: _CONTENT_CACHE_MAX // 4]:
+            del _CONTENT_CACHE[stale]
+    _CONTENT_CACHE[key] = facts
+    _write_disk(key, facts)
+
+
+def _write_disk(key: str, facts: tuple) -> None:
+    """Persist one cache entry under the project the kernel is pointed at (writable kernels only)."""
+    if CACHE_DIR is None or not CACHE_WRITABLE:
+        return
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        write_atomic(CACHE_DIR / f"{key}.json", json.dumps(
+            {"exports": facts[0], "preserved": facts[1], "manual": facts[2], "mined": facts[3], "called": sorted(facts[4]),
+             "imports": facts[5]}, separators=(",", ":")).encode("utf-8"))
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _recall(key: str) -> tuple | None:
+    facts = _CONTENT_CACHE.get(key)
+    if facts is not None:
+        PERF["analysis_memory_hits"] += 1
+        if CACHE_DIR is not None and CACHE_WRITABLE and not (CACHE_DIR / f"{key}.json").exists():
+            _write_disk(key, facts)  # known in memory from another project: this tree gets its own copy
+        return facts
+    if CACHE_DIR is None:
+        return None
+    try:
+        data = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))
+        facts = (list(data["exports"]), list(data["preserved"]), list(data["manual"]), list(data["mined"]), set(data["called"]),
+                 [list(s) for s in data["imports"]])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    PERF["analysis_disk_hits"] += 1
+    _CONTENT_CACHE[key] = facts
+    return facts
+
+
+def top_level_facts(tree: ast.Module) -> tuple[list[str], list[str]]:
+    """(exports, preserved symbols that depend on this file alone): the signatures of
+    public top-level defs and classes, `def` / `class` fingerprints and the decorator
+    fingerprints per module and per symbol (counted when a symbol carries one twice)."""
     exports: list[str] = []
     preserved: list[str] = []
     dec_counts: dict[str, int] = {}
@@ -98,46 +156,280 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
             for member in stmt.body:
                 if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     keep_decorators(member, owner=stmt.name)
+    return exports, preserved
 
-    records = _import_records(node_id, path, tree, modules)
+
+def _dedup_mined(mined_all: list[str], manual: list[str]) -> list[str]:
+    mined: list[str] = []
+    for inv in mined_all:
+        if inv not in manual and inv not in mined:
+            mined.append(inv)
+    return mined
+
+
+def top_level_segments(tree: ast.Module, source: str) -> tuple[dict[str, str], str]:
+    """({segment key: its exact text}, the module-level remainder) — the unit of
+    incremental analysis. A top-level def is one segment (decorators and leading
+    comments included); a class is its shell (`class` line, attributes, nested
+    classes) under its own name plus one segment per method as `Class.method`."""
+    lines = source.splitlines(keepends=True)
+    segs: dict[str, str] = {}
+    covered = bytearray(len(lines) + 2)  # 1-based line -> inside a symbol span
+
+    def text(start: int, end: int) -> str:
+        return "".join(lines[start - 1: end])
+
+    def mark(buf: bytearray, start: int, end: int) -> None:
+        buf[start: end + 1] = b"\x01" * (end - start + 1)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start, end = _symbol_span(lines, node)
+            segs[node.name] = segs.get(node.name, "") + text(start, end)
+            mark(covered, start, end)
+        elif isinstance(node, ast.ClassDef):
+            start, end = _symbol_span(lines, node)
+            mark(covered, start, end)
+            members = bytearray(len(lines) + 2)
+            for m in node.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    ms, me = _symbol_span(lines, m)
+                    key = f"{node.name}.{m.name}"
+                    segs[key] = segs.get(key, "") + text(ms, me)
+                    mark(members, ms, me)
+            shell = "".join(lines[i - 1] for i in range(start, end + 1) if not members[i])
+            segs[node.name] = segs.get(node.name, "") + shell
+    rest = "".join(lines[i - 1] for i in range(1, len(lines) + 1) if not covered[i])
+    return segs, rest
+
+
+_PARSE_CACHE: dict[int, ast.Module] = {}
+_SCOPE_CACHE: dict[tuple[int, int], tuple[set[str] | None, list[str]]] = {}
+
+
+def parse_cached(source: str) -> ast.Module:
+    """`ast.parse` memoized on the text (a handful of entries): one commit parses the
+    module the session holds in Gate A, Gate B and the edit scope alike."""
+    key = hash(source)
+    tree = _PARSE_CACHE.get(key)
+    if tree is None:
+        tree = ast.parse(source)
+        if len(_PARSE_CACHE) >= 16:
+            _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
+        _PARSE_CACHE[key] = tree
+    return tree
+
+
+def in_scope(symbol: str, scope: set[str]) -> bool:
+    """Whether a dotted symbol (`C.m.inner`) falls under one of the scope's segment keys."""
+    return any(symbol == key or symbol.startswith(key + ".") for key in scope)
+
+
+def edit_scope(previous_source: str | None, source: str, tree: ast.Module) -> tuple[set[str] | None, list[str]]:
+    """What an edit from `previous_source` to `source` can affect: (the segment keys —
+    top-level defs, class shells, `Class.method`s — whose text changed or that name a
+    changed symbol; a changed class shell brings every method of the class), with the
+    segment keys in source order. (None, keys) when the module level changed, a side
+    cannot be parsed, or there is no previous source — then everything is in scope."""
+    cache_key = (hash(previous_source), hash(source))
+    hit = _SCOPE_CACHE.get(cache_key)
+    if hit is not None:
+        return (set(hit[0]) if hit[0] is not None else None), list(hit[1])
+    scope = _edit_scope(previous_source, source, tree)
+    if len(_SCOPE_CACHE) >= 16:
+        _SCOPE_CACHE.pop(next(iter(_SCOPE_CACHE)))
+    _SCOPE_CACHE[cache_key] = (set(scope[0]) if scope[0] is not None else None, list(scope[1]))
+    return scope
+
+
+def _edit_scope(previous_source: str | None, source: str, tree: ast.Module) -> tuple[set[str] | None, list[str]]:
+    new_segs, new_rest = top_level_segments(tree, source)
+    order = list(new_segs)
+    if previous_source is None:
+        return None, order
+    if previous_source == source:
+        return set(), order
+    try:
+        old_tree = parse_cached(previous_source)
+    except (SyntaxError, ValueError, RecursionError):
+        return None, order
+    old_segs, old_rest = top_level_segments(old_tree, previous_source)
+    if old_rest != new_rest:
+        return None, order
+    changed = {k for k, t in new_segs.items() if old_segs.get(k) != t} | {k for k in old_segs if k not in new_segs}
+    if not changed:
+        return set(), order
+    for key in list(changed):
+        if "." not in key:  # a class shell (or a top-level def that is also a class name): its members too
+            changed |= {k for k in new_segs if k.startswith(key + ".")}
+    names = sorted({k.split(".")[-1] for k in changed})
+    pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+    return {k for k, t in new_segs.items() if k in changed or pattern.search(t)}, order
+
+
+def mined_owner(inv: str, keys: set[str] | None = None) -> str | None:
+    """The segment a mined invariant belongs to: `call:f(` -> f; `guard:C.m.inner:` -> the
+    longest prefix of `C.m.inner` among `keys` (`C.m`), or its root when no keys are given."""
+    m = _CALL_OWNER_RE.match(inv)
+    if m:
+        return m.group(1)
+    if inv.startswith("guard:"):
+        sym = inv.split(":", 2)[1]
+        if keys:
+            parts = sym.split(".")
+            for i in range(len(parts), 0, -1):
+                if ".".join(parts[:i]) in keys:
+                    return ".".join(parts[:i])
+        return sym.split(".")[0]
+    return None
+
+
+def _scoped_symbols(tree: ast.Module, only: set[str]):
+    """(dotted symbol, def node) like `_py_symbols`, for the segments in `only` alone."""
+    for stmt in tree.body:
+        name = getattr(stmt, "name", None)
+        if name is None or not any(k == name or k.startswith(name + ".") for k in only):
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if in_scope(name, only):
+                yield name, stmt
+                yield from _py_symbols(stmt.body, f"{name}.")
+        elif isinstance(stmt, ast.ClassDef):
+            for m in stmt.body:
+                mname = getattr(m, "name", None)
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and in_scope(f"{name}.{mname}", only):
+                    yield f"{name}.{mname}", m
+                    yield from _py_symbols(m.body, f"{name}.{mname}.")
+                elif isinstance(m, ast.ClassDef) and (name in only or in_scope(f"{name}.{mname}", only)):
+                    yield from _py_symbols([m], f"{name}.")
+
+
+def _mined_group(inv: str) -> int:
+    if inv.startswith("guard:"):
+        return 2
+    return 1 if " == " in inv and " raises " not in inv else 0
+
+
+def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manual: list[str]) -> list[str] | None:
+    """The mined invariants of `source`, re-mining only the top-level symbols the edit from
+    `previous.source` can affect and keeping the previous ones for the rest. None when the
+    module level changed (constants, imports), so a full analysis is needed."""
+    affected, order = edit_scope(previous.source, source, tree)
+    if affected is None:
+        return None
+    if not affected:
+        return _dedup_mined(list(previous.mined_invariants), manual)
+    PERF["symbols_remined"] += len(affected)
+    keys = set(order)
+    fresh = (mine_guard_invariants(tree, only=affected), mine_branch_invariants(tree, only=affected),
+             mine_structural_guards(tree, only=affected))
+    old: tuple[list[str], list[str], list[str]] = ([], [], [])
+    for inv in previous.mined_invariants:
+        old[_mined_group(inv)].append(inv)
+    merged: list[str] = []
+    for fresh_group, old_group in zip(fresh, old):
+        by_owner: dict[str, list[str]] = {}
+        for inv in old_group:
+            owner = mined_owner(inv, keys)
+            if owner is not None and owner in keys and not in_scope(owner, affected):
+                by_owner.setdefault(owner, []).append(inv)
+        for inv in fresh_group:
+            owner = mined_owner(inv, keys)
+            if owner is not None and in_scope(owner, affected):
+                by_owner.setdefault(owner, []).append(inv)
+        for name in order:
+            merged += by_owner.pop(name, [])
+        for rest in by_owner.values():
+            merged += rest
+    return _dedup_mined(merged, manual)
+
+
+def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str], *,
+            previous: ModuleInfo | None = None) -> ModuleInfo:
+    """Parse one module into its OKF facts. Raises SyntaxError on broken source.
+    `previous` (the same file's last analysis) makes the mining incremental: only the
+    top-level symbols the edit can affect are re-mined; the content-addressed cache
+    answers a repeat of the same text without any mining.
+    `project_modules` maps importable dotted names to node ids (see module_map);
+    a plain set of flat module names is accepted for backwards compatibility.
+    Decorators are fingerprinted twice: once per module (`@name`) and once per
+    symbol (`@name on symbol`), so dropping `@fixture` from one function is an
+    omission even while a sibling still carries it. Method decorators are
+    fingerprinted per dotted symbol (`@width.setter on Box.width`). A decorator a
+    symbol carries more than once — `@overload` on each signature of an overload
+    set — is counted (`@overload on f x2`, `x3`, …), so losing one of the blocks
+    is an omission too."""
+    _mod = lang_module(path)
+    if _mod is not None:
+        return _mod.analyze(node_id, path, source, project_modules)
+    tree = ast.parse(source)
+    modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
+    key = _content_key(path, source)
+    facts = _recall(key)
+    if facts is None:
+        exports, preserved_base = top_level_facts(tree)
+        manual = harvest_invariants(source)
+        mined = None
+        if previous is not None and previous.path == path and previous.source != source:
+            mined = _incremental_mined(tree, source, previous, manual)
+            if mined is not None:
+                PERF["analysis_incremental"] += 1
+        if mined is None:
+            PERF["analysis_full"] += 1
+            mined = _dedup_mined(mine_guard_invariants(tree) + mine_branch_invariants(tree) + mine_structural_guards(tree), manual)
+        called = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        facts = (exports, preserved_base, manual, mined, called, import_statements(tree))
+        _remember(key, facts)
+    exports, preserved_base, manual, mined, called, statements = facts
+
+    records = _records_from(node_id, path, statements, modules)
     deps = sorted({nid for nid, _name, _local in records})
-
     # Internal calls into project dependencies are preserved symbols too.
+    preserved = list(preserved_base)
     imported_names = {local for _nid, _name, local in records if local}
-    called = {
-        n.func.id
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-    }
     for name in sorted(imported_names & called):
         sym = f"call:{name}"
         if sym not in preserved:
             preserved.append(sym)
 
-    manual = harvest_invariants(source)
-    mined = []
-    for inv in mine_guard_invariants(tree) + mine_branch_invariants(tree) + mine_structural_guards(tree):
-        if inv not in manual and inv not in mined:
-            mined.append(inv)
-    invariants = manual + mined
-
     return ModuleInfo(
         node_id=node_id,
         path=path,
         source=source,
-        exports=exports,
+        exports=list(exports),
         deps=deps,
         preserved_symbols=preserved,
-        invariants=invariants,
-        mined_invariants=mined,
+        invariants=list(manual) + list(mined),
+        mined_invariants=list(mined),
     )
 
 
-def statement_count(source: str) -> int:
+def statement_count(source: str, tree: ast.Module | None = None) -> int:
     _mod = foreign_module(source)
     if _mod is not None:
         return _mod.statement_count(source)
-    return sum(1 for n in ast.walk(ast.parse(source)) if isinstance(n, ast.stmt))
+    key = hash(source)
+    cached = _STMT_COUNT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    # Statements nest only in statement bodies: walk those lists, never the expressions.
+    n = 0
+    stack: list = list((tree if tree is not None else ast.parse(source)).body)
+    while stack:
+        s = stack.pop()
+        if isinstance(s, ast.stmt):
+            n += 1
+        for attr in ("body", "orelse", "finalbody", "handlers", "cases"):
+            children = getattr(s, attr, None)
+            if isinstance(children, list):
+                stack.extend(children)
+    if len(_STMT_COUNT_CACHE) >= 64:
+        _STMT_COUNT_CACHE.pop(next(iter(_STMT_COUNT_CACHE)))
+    _STMT_COUNT_CACHE[key] = n
+    return n
+
+
+_STMT_COUNT_CACHE: dict[int, int] = {}
 
 
 def frame_markdown(
@@ -806,7 +1098,7 @@ def _exception_name(raise_stmt: ast.Raise) -> str | None:
     return exc.id if isinstance(exc, ast.Name) else None
 
 
-def mine_guard_invariants(tree: ast.Module, covered: set | None = None) -> list[str]:
+def mine_guard_invariants(tree: ast.Module, covered: set | None = None, only: set[str] | None = None) -> list[str]:
     """For every top-level function (sync or async) whose body opens with guard
     clauses (`if <cond on one parameter>: raise <Exc>`), synthesize a callable
     invariant `call:fn(param=value, …) raises Exc` with arguments that trip
@@ -822,6 +1114,8 @@ def mine_guard_invariants(tree: ast.Module, covered: set | None = None) -> list[
     for fn in tree.body:
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
+        if only is not None and fn.name not in only:
+            continue  # incremental analysis: this symbol's probes are kept from the previous analysis
         a = fn.args
         positional = a.posonlyargs + a.args
         params = {p.arg: p for p in positional + a.kwonlyargs}
@@ -985,23 +1279,27 @@ def _py_guards(fn: ast.FunctionDef | ast.AsyncFunctionDef, mining: bool) -> list
     return out
 
 
-def mine_structural_guards(tree: ast.Module) -> list[str]:
+def mine_structural_guards(tree: ast.Module, only: set[str] | None = None) -> list[str]:
     """`guard:<Symbol>:<clause>` for every guard clause (see `_py_guards`) of every
     top-level function and class method — no runtime argument synthesis, so
     methods, external types (`isinstance(x, CookieJar)`), asserts and non-leading
     checks are covered. Gate C requires each one to stay structurally present
     in its symbol's body unless the commit declares the deletion. A leading guard
     the runtime miner already exercises (`call:fn(…) raises Exc`) is left to that
-    semantic check, so an equivalent rewrite of its condition still passes."""
+    semantic check, so an equivalent rewrite of its condition still passes.
+    `only` restricts the walk to the top-level symbols named (incremental analysis)."""
     covered: set = set()
-    mine_guard_invariants(tree, covered)
-    return [f"guard:{sym}:{g}" for sym, fn in _py_symbols(tree.body) for g in _py_guards(fn, True)
+    mine_guard_invariants(tree, covered, only={k for k in only if "." not in k} if only is not None else None)
+    symbols = _py_symbols(tree.body) if only is None else _scoped_symbols(tree, only)
+    return [f"guard:{sym}:{g}" for sym, fn in symbols for g in _py_guards(fn, True)
             if not any(sym == name and g.startswith(f"if {test} raises ") for name, test in covered)]
 
 
-def present_structural_guards(tree: ast.Module) -> set[str]:
-    """Every Python `guard:` clause present anywhere in each symbol's body."""
-    return {f"guard:{sym}:{g}" for sym, fn in _py_symbols(tree.body) for g in _py_guards(fn, False)}
+def present_structural_guards(tree: ast.Module, only: set[str] | None = None) -> set[str]:
+    """Every Python `guard:` clause present anywhere in each symbol's body (`only`:
+    just the segments named — top-level defs, class shells, `Class.method`s)."""
+    symbols = _py_symbols(tree.body) if only is None else _scoped_symbols(tree, only)
+    return {f"guard:{sym}:{g}" for sym, fn in symbols for g in _py_guards(fn, False)}
 
 
 # ------------------------------------- deterministic branch invariant mining
@@ -1107,7 +1405,7 @@ def _is_pure(fn: ast.FunctionDef, allowed: set[str]) -> bool:
     return reads <= (local | allowed)
 
 
-def mine_branch_invariants(tree: ast.Module) -> list[str]:
+def mine_branch_invariants(tree: ast.Module, only: set[str] | None = None) -> list[str]:
     """Characterize deterministic value-returning branches as executable
     invariants `call:fn(param=<literal>, …) == <result>`.
 
@@ -1153,15 +1451,20 @@ def mine_branch_invariants(tree: ast.Module) -> list[str]:
         return seen
 
     exceptions = _exception_builtins()
-    pure: dict[str, bool] = {}
-    for name in fns:
-        allowed = set(fns) | set(constants) | _PURE_BUILTINS | exceptions
-        pure[name] = _is_pure(fns[name], allowed)
+    allowed = set(fns) | set(constants) | _PURE_BUILTINS | exceptions
+    pure_memo: dict[str, bool] = {}
+
+    def pure(name: str) -> bool:  # purity is only needed for the closures of the targets below
+        if name not in pure_memo:
+            pure_memo[name] = _is_pure(fns[name], allowed)
+        return pure_memo[name]
 
     targets: list[tuple[str, str, object]] = []
     for helper, pairs in facts.items():
         for param, value in pairs:
             for name, fn in fns.items():
+                if only is not None and name not in only:
+                    continue  # incremental analysis: kept from the previous analysis
                 a = fn.args
                 takes = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
                 if (name == helper or helper in closure(name)) and param in takes:
@@ -1174,9 +1477,10 @@ def mine_branch_invariants(tree: ast.Module) -> list[str]:
     import __future__
 
     out: list[str] = []
+    compiled: dict[frozenset, object] = {}  # one compile per closure, however many targets share it
     for name, param, value in targets:
         group = closure(name)
-        if not all(pure[g] for g in group):
+        if not all(pure(g) for g in group):
             continue
         a = fns[name].args
         positional = a.posonlyargs + a.args
@@ -1202,10 +1506,13 @@ def mine_branch_invariants(tree: ast.Module) -> list[str]:
                 kw_args[p.arg] = v
         if not ok:
             continue
-        module = ast.Module(body=[fns[g] for g in fns if g in group], type_ignores=[])
         try:
-            code = compile(ast.unparse(module), "<okf-branch>", "exec",
-                           flags=__future__.annotations.compiler_flag, dont_inherit=True)
+            code = compiled.get(frozenset(group))
+            if code is None:
+                module = ast.Module(body=[fns[g] for g in fns if g in group], type_ignores=[])
+                code = compile(ast.unparse(module), "<okf-branch>", "exec",
+                               flags=__future__.annotations.compiler_flag, dont_inherit=True)
+                compiled[frozenset(group)] = code
             ns: dict = {"__builtins__": {n: getattr(builtins, n) for n in (_PURE_BUILTINS | exceptions)
                                          if hasattr(builtins, n)}, **constants}
             results = []
@@ -1299,6 +1606,25 @@ def _import_records(
     nesting depth: function-scoped (lazy) imports, `if TYPE_CHECKING:` blocks and
     `try: … except ImportError:` fallbacks are dependencies too.
     Relative imports resolve against the importing file's package."""
+    return _records_from(node_id, path, import_statements(tree), modules)
+
+
+def import_statements(tree: ast.Module) -> list[list]:
+    """Every import in the module at any depth, as plain data — `["import", name, asname]`
+    or `["from", level, module, [[name, asname], …]]` — the content-only half of
+    `_import_records`, so it can live in the analysis cache."""
+    out: list[list] = []
+    for stmt in ast.walk(tree):
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                out.append(["import", alias.name, alias.asname])
+        elif isinstance(stmt, ast.ImportFrom):
+            out.append(["from", stmt.level or 0, stmt.module, [[a.name, a.asname] for a in stmt.names]])
+    return out
+
+
+def _records_from(node_id: str, path: str, statements: list[list], modules: dict[str, str]) -> list[tuple[str, str | None, str | None]]:
+    """`_import_records` resolved from `import_statements` output against the project's modules."""
     package = _package_of(path)
     out: list[tuple[str, str | None, str | None]] = []
 
@@ -1306,30 +1632,31 @@ def _import_records(
         if nid is not None and nid != node_id and (nid, name, local) not in out:
             out.append((nid, name, local))
 
-    for stmt in ast.walk(tree):
-        if isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                nid, _exact = _lookup(alias.name, modules)
-                add(nid, None, alias.asname or alias.name.split(".")[0])
-        elif isinstance(stmt, ast.ImportFrom):
-            if stmt.level:
+    for stmt in statements:
+        if stmt[0] == "import":
+            _kind, name, asname = stmt
+            nid, _exact = _lookup(name, modules)
+            add(nid, None, asname or name.split(".")[0])
+        else:
+            _kind, level, module, names = stmt
+            if level:
                 base_parts = package.split(".") if package else []
-                if stmt.level - 1 > len(base_parts):
+                if level - 1 > len(base_parts):
                     continue  # climbs above the project root
-                base_parts = base_parts[: len(base_parts) - (stmt.level - 1)]
-                base = ".".join(base_parts + ([stmt.module] if stmt.module else []))
+                base_parts = base_parts[: len(base_parts) - (level - 1)]
+                base = ".".join(base_parts + ([module] if module else []))
             else:
-                base = stmt.module or ""
+                base = module or ""
             base_nid, exact = _lookup(base, modules) if base else (None, False)
-            for alias in stmt.names:
-                if alias.name == "*":
+            for name, asname in names:
+                if name == "*":
                     continue
-                local = alias.asname or alias.name
-                sub_nid, sub_exact = _lookup(f"{base}.{alias.name}" if base else alias.name, modules)
+                local = asname or name
+                sub_nid, sub_exact = _lookup(f"{base}.{name}" if base else name, modules)
                 if sub_exact and sub_nid != base_nid:
                     add(sub_nid, None, local)  # `from pkg import submodule`
                 elif base_nid is not None:
-                    add(base_nid, alias.name if exact else None, local)
+                    add(base_nid, name if exact else None, local)
     return out
 
 
@@ -1638,16 +1965,53 @@ def strip_suffix(path: str) -> str:
     return path
 
 
+_GENERATED_FILE_RE = re.compile(r"(_pb2(_grpc)?\.py|\.min\.(js|css|mjs)|\.generated\.[^/]+|\.g\.(ts|js|cs|java)|\.pb\.go|\.pb\.(ts|js)|\.freezed\.dart)$")
+
+
+def is_generated_path(rel: str) -> bool:
+    """Generated or vendored code the kernel never indexes: Django `migrations/`,
+    protobuf / gRPC stubs, minified bundles, `*.generated.*`, build output
+    (`dist`, `build`, `out`, `target`, `.next`), `vendor/` and `node_modules/`."""
+    rel = rel.replace("\\", "/")
+    parts = rel.split("/")
+    if any(part in _EXCLUDED_DIRS_ALL or part == "migrations" or part.startswith(".") for part in parts[:-1]):
+        return True
+    return bool(_GENERATED_FILE_RE.search(parts[-1]))
+
+
+def _git_visible(root: Path) -> set[str] | None:
+    """Relative paths git would track or sees as untracked-but-not-ignored, or None when
+    `root` is not inside a repository (or git is unavailable): the .gitignore fast path."""
+    if not (root / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return {p.decode("utf-8", "replace").replace("\\", "/") for p in out.stdout.split(b"\0") if p}
+
+
 def tracked_files(root: Path) -> list[Path]:
     """Every source file the kernel indexes under `root`: Python, TypeScript /
-    JavaScript, Go, Rust and Java, skipping `.d.ts`, hidden entries, `.stepcheck/`
-    and build/dependency directories (`node_modules`, `dist`, `build`, `out`,
-    `vendor`, `target`, `testdata`; `.gradle` is hidden)."""
-    return sorted(
-        p for p in root.rglob("*")
-        if p.is_file() and language(str(p)) != "other"
-        and not any(part in _EXCLUDED_DIRS_ALL or part.startswith(".") for part in p.relative_to(root).parts)
-    )
+    JavaScript, Go, Rust and Java, skipping `.d.ts`, hidden entries, `.stepcheck/`,
+    build / dependency directories (`node_modules`, `dist`, `build`, `out`,
+    `vendor`, `target`, `testdata`; `.gradle` is hidden), generated code
+    (`is_generated_path`) and, inside a git repository, everything `.gitignore` hides."""
+    visible = _git_visible(root)
+    out = []
+    for p in root.rglob("*"):
+        if not p.is_file() or language(str(p)) == "other":
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        if is_generated_path(rel) or p.name.startswith("."):
+            continue
+        if visible is not None and rel not in visible:
+            continue
+        out.append(p)
+    return sorted(out)
 
 
 def _def_stub(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> str:

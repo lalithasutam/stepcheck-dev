@@ -1,0 +1,91 @@
+{
+ "generated_at": "2026-11-09T07:03:23.909102+00:00",
+ "generator": ".stepcheck/discovery/benchmark_enterprise_scale.py",
+ "label": "slice35-fullrepo",
+ "kernel_commit": "4912e62",
+ "backend_dirty": false,
+ "python": "3.11.9",
+ "results": {
+  "1_monoliths": {},
+  "2_repository": {
+   "repo": ".stepcheck\\discovery\\_cache\\django",
+   "tracked_files": 2980,
+   "loc": 537414,
+   "init_session_crash": "SyntaxError: invalid syntax (<unknown>, line 48)",
+   "seconds_before_crash": 185.8
+  },
+  "3_noise": {
+   "files_in_tree": 16,
+   "tracked": [
+    "app/migrations/0001_initial.py",
+    "app/migrations/__init__.py",
+    "app/models.py",
+    "artifacts/generated_big.py",
+    "proto/foo_pb2.py",
+    "proto/foo_pb2_grpc.py",
+    "web/app.generated.ts",
+    "web/bundle.min.js",
+    "web/src/app.ts"
+   ],
+   "tracked_count": 9,
+   "noise_tracked": [
+    "app/migrations/0001_initial.py",
+    "app/migrations/__init__.py",
+    "artifacts/generated_big.py",
+    "proto/foo_pb2.py",
+    "proto/foo_pb2_grpc.py",
+    "web/app.generated.ts",
+    "web/bundle.min.js"
+   ],
+   "noise_tracked_count": 7,
+   "discover_ms": 15.1,
+   "init_ms": 3425.2,
+   "invariants_mined_in_noise": 0,
+   "gitignored_tracked": [
+    "artifacts/generated_big.py",
+    "web/bundle.min.js"
+   ]
+  },
+  "4_resilience": {
+   "bom_crlf": {
+    "indexed": true,
+    "latin1_skipped": true,
+    "commit_accepted": true,
+    "bom_preserved": true,
+    "crlf_preserved": true
+   },
+   "nesting_50": {
+    "indexed": true,
+    "commit": "accepted",
+    "ms": 104.4
+   },
+   "nesting_120": {
+    "crash": "IndentationError('too many levels of indentation', ('<unknown>', 101, 1, '                                                                                      "
+   },
+   "nesting_400": {
+    "crash": "IndentationError('too many levels of indentation', ('<unknown>', 101, 1, '                                                                                      "
+   },
+   "circular_wildcard": {
+    "indexed": [
+     "consumer.py",
+     "pkg/__init__.py",
+     "pkg/a.py",
+     "pkg/b.py"
+    ],
+    "commit_accepted": true,
+    "dirtied": [
+     "b"
+    ],
+    "status": {
+     "pkg/__init__.py": "ACTIVE",
+     "pkg/a.py": "VERIFIED",
+     "pkg/b.py": "DIRTY_OMISSION_RISK",
+     "consumer.py": "ACTIVE"
+    },
+    "ms": 164.2,
+    "terminated": true
+   }
+  }
+ },
+ "runtime_s": 191.9
+}

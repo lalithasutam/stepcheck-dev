@@ -1,0 +1,114 @@
+{
+ "generated_at": "2026-11-09T08:04:00.625092+00:00",
+ "generator": ".stepcheck/discovery/benchmark_enterprise_scale.py",
+ "label": "slice36-fullrepo",
+ "kernel_commit": "4912e62",
+ "backend_dirty": true,
+ "python": "3.11.9",
+ "results": {
+  "1_monoliths": {},
+  "2_repository": {
+   "repo": ".stepcheck\\discovery\\_cache\\django",
+   "tracked_files": 2665,
+   "loc": 499624,
+   "nodes": 2660,
+   "init_session_s": 231.4,
+   "init_files_per_s": 11.5,
+   "tracemalloc_peak_mb": 242.0,
+   "rss_before_mb": null,
+   "rss_after_mb": null,
+   "peak_rss_mb": null,
+   "session_file_mb": 22.1,
+   "hook_edit_target": "django\\db\\models\\query.py",
+   "hook_edit_ms": {
+    "n": 5,
+    "p50": 625.2,
+    "p95": 700.7,
+    "max": 700.7,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "hook_edit_decision": "allow (no opinion)",
+   "hook_read_ms": {
+    "n": 3,
+    "p50": 3.4,
+    "p95": 775.9,
+    "max": 775.9,
+    "under_25ms_pct": 66.7,
+    "under_50ms_pct": 66.7
+   },
+   "fresh_process_rehydrate_ms": 435.7,
+   "ci": {
+    "cold": {
+     "seconds": 9.7,
+     "exit": 1,
+     "last_line": "stepcheck ci: FAIL \u2014 1 problem(s) in parse; first: tests\\test_runner_apps\\tagged\\tests_syntax_error.py \u2014 Gate A: invalid AST syntax: invalid decimal literal (li"
+    },
+    "warm": {
+     "seconds": 9.8,
+     "exit": 1,
+     "last_line": "stepcheck ci: FAIL \u2014 1 problem(s) in parse; first: tests\\test_runner_apps\\tagged\\tests_syntax_error.py \u2014 Gate A: invalid AST syntax: invalid decimal literal (li"
+    }
+   }
+  },
+  "3_noise": {
+   "files_in_tree": 16,
+   "tracked": [
+    "app/models.py",
+    "web/src/app.ts"
+   ],
+   "tracked_count": 2,
+   "noise_tracked": [],
+   "noise_tracked_count": 0,
+   "discover_ms": 58.7,
+   "init_ms": 77.8,
+   "invariants_mined_in_noise": 0,
+   "gitignored_tracked": []
+  },
+  "4_resilience": {
+   "bom_crlf": {
+    "indexed": true,
+    "latin1_skipped": true,
+    "commit_accepted": true,
+    "bom_preserved": true,
+    "crlf_preserved": true
+   },
+   "nesting_50": {
+    "indexed": true,
+    "commit": "accepted",
+    "ms": 59.5
+   },
+   "nesting_120": {
+    "indexed": false,
+    "commit": "untracked: past the parser's limits, index unaffected",
+    "ms": 41.6
+   },
+   "nesting_400": {
+    "indexed": false,
+    "commit": "untracked: past the parser's limits, index unaffected",
+    "ms": 70.1
+   },
+   "circular_wildcard": {
+    "indexed": [
+     "consumer.py",
+     "pkg/__init__.py",
+     "pkg/a.py",
+     "pkg/b.py"
+    ],
+    "commit_accepted": true,
+    "dirtied": [
+     "b"
+    ],
+    "status": {
+     "pkg/__init__.py": "ACTIVE",
+     "pkg/a.py": "VERIFIED",
+     "pkg/b.py": "DIRTY_OMISSION_RISK",
+     "consumer.py": "ACTIVE"
+    },
+    "ms": 99.0,
+    "terminated": true
+   }
+  }
+ },
+ "runtime_s": 278.9
+}

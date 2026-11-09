@@ -406,7 +406,10 @@ def test_statekernel_method_focus_is_half_the_class_focus_on_the_real_kernel(ker
     # 2026-11-07. Slice 33 names the whole transitive cone behind the callee
     # budget (the helpers and constants the folded callees reach — about 100
     # tokens of names on this module): 3,35x against 11,771 (28.5%) on
-    # 2026-11-08. The floor is the old one plus that budget plus the named cone:
-    assert method.token_count < 2300 + 1000 + 150, (method.token_count, whole.token_count)
+    # 2026-11-08. Slice 36 adds commit's incremental-analysis helpers (`_shared_trees`,
+    # `_as_mechanical`, `_point_cache`) to the same-file cone, rendered verbatim within
+    # the callee budget: 3,513 against 12,417 (28.3%) on 2026-11-09. The floor is the
+    # old one plus that budget plus the named cone plus those helpers:
+    assert method.token_count < 2300 + 1000 + 150 + 150, (method.token_count, whole.token_count)
     assert "of the focus, expanded verbatim: StateKernel.__init__, StateKernel._flush, StateKernel._get" in method.frame_markdown
     assert method.token_count <= 0.4 * whole.token_count, (method.token_count, whole.token_count)

@@ -1,0 +1,441 @@
+{
+ "generated_at": "2026-11-09T07:11:19.547316+00:00",
+ "generator": ".stepcheck/discovery/benchmark_enterprise_scale.py",
+ "label": "slice35",
+ "kernel_commit": "4912e62",
+ "backend_dirty": true,
+ "python": "3.11.9",
+ "results": {
+  "1_monoliths": {
+   "files": 15,
+   "loc_total": 72904,
+   "init": {
+    "n": 15,
+    "p50": 396.1,
+    "p95": 559.1,
+    "max": 594.6,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "checkout": {
+    "n": 15,
+    "p50": 255.1,
+    "p95": 398.4,
+    "max": 404.9,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "dry_run_commit": {
+    "n": 69,
+    "p50": 1216.1,
+    "p95": 1850.1,
+    "max": 1929.7,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "landed_commit": {
+    "n": 14,
+    "p50": 1285.4,
+    "p95": 1979.1,
+    "max": 2034.1,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "rows": [
+    {
+     "module": "6bcdb93328 6bcdb93328ed",
+     "loc": 8165,
+     "functions": 91,
+     "init_ms": 547.7,
+     "checkout_ms": 404.9,
+     "checkout_tokens": 402,
+     "dry_commit_ms": [
+      1850.1,
+      1731.1,
+      1770.6,
+      1737.2,
+      1727.9
+     ],
+     "landed_commit_ms": 1884.0,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "31adbfd71e 31adbfd71e3b",
+     "loc": 8055,
+     "functions": 92,
+     "init_ms": 511.2,
+     "checkout_ms": 331.6,
+     "checkout_tokens": 399,
+     "dry_commit_ms": [
+      1681.9,
+      1667.7,
+      1664.0,
+      1687.0,
+      1698.0
+     ],
+     "landed_commit_ms": 1880.0,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "786f248c62 786f248c6276",
+     "loc": 6377,
+     "functions": 228,
+     "init_ms": 559.1,
+     "checkout_ms": 398.4,
+     "checkout_tokens": 3720,
+     "dry_commit_ms": [
+      1898.0,
+      1833.4,
+      1856.7,
+      1929.7,
+      1821.4
+     ],
+     "landed_commit_ms": 2034.1,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "485bcd9d99 485bcd9d9937",
+     "loc": 5836,
+     "functions": 218,
+     "init_ms": 362.8,
+     "checkout_ms": 255.1,
+     "checkout_tokens": 3278,
+     "dry_commit_ms": [
+      1090.3,
+      1067.9,
+      1109.7,
+      1034.1
+     ],
+     "landed_commit_ms": 1220.0,
+     "outcomes": {
+      "accepted": 4
+     }
+    },
+    {
+     "module": "b3e6577204 b3e65772043b",
+     "loc": 5701,
+     "functions": 168,
+     "init_ms": 396.1,
+     "checkout_ms": 238.0,
+     "checkout_tokens": 959,
+     "dry_commit_ms": [
+      1216.1,
+      1180.8,
+      1236.5,
+      1193.2,
+      1186.8
+     ],
+     "landed_commit_ms": 1349.9,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "1dff36d56c Data structure for 1-dimensional cross-sectional a",
+     "loc": 4752,
+     "functions": 109,
+     "init_ms": 220.4,
+     "checkout_ms": 172.9,
+     "checkout_tokens": 348,
+     "dry_commit_ms": [
+      858.8,
+      694.3,
+      706.3,
+      900.7,
+      872.2
+     ],
+     "landed_commit_ms": 975.6,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "5b60920fd3 5b60920fd380",
+     "loc": 4195,
+     "functions": 157,
+     "init_ms": 594.6,
+     "checkout_ms": 373.5,
+     "checkout_tokens": 3388,
+     "dry_commit_ms": [
+      1625.4,
+      1794.7,
+      1755.2,
+      1806.7,
+      1830.1
+     ],
+     "landed_commit_ms": 1979.1,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "9f0587fc68 9f0587fc68b7",
+     "loc": 3980,
+     "functions": 149,
+     "init_ms": 468.3,
+     "checkout_ms": 263.7,
+     "checkout_tokens": 3231,
+     "dry_commit_ms": [
+      1793.5,
+      1703.4,
+      1549.7,
+      1417.3,
+      1641.1
+     ],
+     "landed_commit_ms": 1783.6,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "ea1b4efe72 ea1b4efe7230",
+     "loc": 3973,
+     "functions": 132,
+     "init_ms": 383.3,
+     "checkout_ms": 232.4,
+     "checkout_tokens": 349,
+     "dry_commit_ms": [
+      1195.5,
+      1105.0,
+      994.6,
+      1201.4,
+      1080.5
+     ],
+     "landed_commit_ms": 1285.4,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "8162cdcee9 8162cdcee92d",
+     "loc": 3829,
+     "functions": 143,
+     "init_ms": 282.7,
+     "checkout_ms": 161.3,
+     "checkout_tokens": 1260,
+     "dry_commit_ms": [
+      716.4,
+      704.2,
+      740.8,
+      748.0,
+      765.1
+     ],
+     "landed_commit_ms": 859.1,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "234068e538 234068e5389f",
+     "loc": 3827,
+     "functions": 198,
+     "init_ms": 430.4,
+     "checkout_ms": 344.9,
+     "checkout_tokens": 2436,
+     "dry_commit_ms": [
+      1432.2,
+      1352.5,
+      1500.6,
+      1575.4,
+      1478.4
+     ],
+     "landed_commit_ms": 1513.9,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "3b8acac25c 3b8acac25c67",
+     "loc": 3721,
+     "functions": 163,
+     "init_ms": 424.2,
+     "checkout_ms": 306.6,
+     "checkout_tokens": 262,
+     "dry_commit_ms": [
+      1453.6,
+      1566.1,
+      1352.4,
+      1077.9,
+      1057.3
+     ],
+     "landed_commit_ms": 1249.7,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "1f704ee343 1f704ee343af",
+     "loc": 3583,
+     "functions": 186,
+     "init_ms": 300.9,
+     "checkout_ms": 178.0,
+     "checkout_tokens": 3813,
+     "dry_commit_ms": [
+      818.1,
+      958.8,
+      999.2,
+      1060.8,
+      1035.8
+     ],
+     "landed_commit_ms": 1193.6,
+     "outcomes": {
+      "accepted": 5
+     }
+    },
+    {
+     "module": "8aee65fa0f 8aee65fa0ffe",
+     "loc": 3500,
+     "functions": 0,
+     "init_ms": 155.9,
+     "checkout_ms": 50.4,
+     "checkout_tokens": 241,
+     "dry_commit_ms": [],
+     "landed_commit_ms": null,
+     "outcomes": {}
+    },
+    {
+     "module": "5370446210 GUI neutral widgets",
+     "loc": 3410,
+     "functions": 163,
+     "init_ms": 318.1,
+     "checkout_ms": 174.0,
+     "checkout_tokens": 336,
+     "dry_commit_ms": [
+      1002.3,
+      986.8,
+      1104.2,
+      1008.8,
+      1009.6
+     ],
+     "landed_commit_ms": 1109.3,
+     "outcomes": {
+      "accepted": 5
+     }
+    }
+   ]
+  },
+  "2_repository": {
+   "repo": ".stepcheck\\discovery\\_cache\\django\\django",
+   "tracked_files": 930,
+   "loc": 170643,
+   "nodes": 930,
+   "init_session_s": 135.9,
+   "init_files_per_s": 6.8,
+   "tracemalloc_peak_mb": 58.9,
+   "rss_before_mb": null,
+   "rss_after_mb": null,
+   "peak_rss_mb": null,
+   "session_file_mb": 7.7,
+   "hook_edit_target": "db\\models\\sql\\query.py",
+   "hook_edit_ms": {
+    "n": 5,
+    "p50": 898.3,
+    "p95": 1100.1,
+    "max": 1100.1,
+    "under_25ms_pct": 0.0,
+    "under_50ms_pct": 0.0
+   },
+   "hook_edit_decision": "allow (no opinion)",
+   "hook_read_ms": {
+    "n": 3,
+    "p50": 3.2,
+    "p95": 97.3,
+    "max": 97.3,
+    "under_25ms_pct": 66.7,
+    "under_50ms_pct": 66.7
+   },
+   "fresh_process_rehydrate_ms": 138.0,
+   "ci": {
+    "cold": {
+     "seconds": 107.2,
+     "exit": 1,
+     "last_line": "stepcheck ci: FAIL \u2014 7 problem(s) in gates; first: contrib\\gis\\geos\\prototypes\\errcheck.py (contrib.gis.geos.prototypes.errcheck) \u2014 Gate C: staged module 'contr"
+    },
+    "warm": {
+     "seconds": 91.0,
+     "exit": 1,
+     "last_line": "stepcheck ci: FAIL \u2014 7 problem(s) in gates; first: contrib\\gis\\geos\\prototypes\\errcheck.py (contrib.gis.geos.prototypes.errcheck) \u2014 Gate C: staged module 'contr"
+    }
+   }
+  },
+  "3_noise": {
+   "files_in_tree": 16,
+   "tracked": [
+    "app/migrations/0001_initial.py",
+    "app/migrations/__init__.py",
+    "app/models.py",
+    "artifacts/generated_big.py",
+    "proto/foo_pb2.py",
+    "proto/foo_pb2_grpc.py",
+    "web/app.generated.ts",
+    "web/bundle.min.js",
+    "web/src/app.ts"
+   ],
+   "tracked_count": 9,
+   "noise_tracked": [
+    "app/migrations/0001_initial.py",
+    "app/migrations/__init__.py",
+    "artifacts/generated_big.py",
+    "proto/foo_pb2.py",
+    "proto/foo_pb2_grpc.py",
+    "web/app.generated.ts",
+    "web/bundle.min.js"
+   ],
+   "noise_tracked_count": 7,
+   "discover_ms": 14.0,
+   "init_ms": 3237.2,
+   "invariants_mined_in_noise": 0,
+   "gitignored_tracked": [
+    "artifacts/generated_big.py",
+    "web/bundle.min.js"
+   ]
+  },
+  "4_resilience": {
+   "bom_crlf": {
+    "indexed": true,
+    "latin1_skipped": true,
+    "commit_accepted": true,
+    "bom_preserved": true,
+    "crlf_preserved": true
+   },
+   "nesting_50": {
+    "indexed": true,
+    "commit": "accepted",
+    "ms": 83.6
+   },
+   "nesting_120": {
+    "crash": "IndentationError('too many levels of indentation', ('<unknown>', 101, 1, '                                                                                      "
+   },
+   "nesting_400": {
+    "crash": "IndentationError('too many levels of indentation', ('<unknown>', 101, 1, '                                                                                      "
+   },
+   "circular_wildcard": {
+    "indexed": [
+     "consumer.py",
+     "pkg/__init__.py",
+     "pkg/a.py",
+     "pkg/b.py"
+    ],
+    "commit_accepted": true,
+    "dirtied": [
+     "b"
+    ],
+    "status": {
+     "pkg/__init__.py": "ACTIVE",
+     "pkg/a.py": "VERIFIED",
+     "pkg/b.py": "DIRTY_OMISSION_RISK",
+     "consumer.py": "ACTIVE"
+    },
+    "ms": 66.7,
+    "terminated": true
+   }
+  }
+ },
+ "runtime_s": 475.2
+}

@@ -1,6 +1,6 @@
 # StepCheck: a deterministic context firewall and gated state engine for AI coding agents
 
-Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `36c6280` (post-slice).
+Generated 2026-11-03 from execution receipts by `.stepcheck/discovery/verify_integrity.py`. Kernel evaluated: `80a1539` (pre-slice) and `4912e62` (post-slice).
 
 ## Abstract
 
@@ -88,7 +88,7 @@ Faults are synthetic AST mutations. All timings come from one Windows machine. T
 
 ## 4. Reproducibility
 
-`python -m pytest -q` (321 passed), `stepcheck ci .` (77 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
+`python -m pytest -q` (346 passed), `stepcheck ci .` (78 modules), `.stepcheck/paper_eval/run_eval.py`, `.stepcheck/discovery/engine_explorer.py`, `product_explorer.py`, `market_explorer.py`, `gtm_explorer.py`, then `verify_integrity.py`.
 
 ## 5. v0.2 campaign results
 

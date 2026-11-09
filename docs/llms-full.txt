@@ -97,7 +97,7 @@ key. Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 321 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/tests/` | 346 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.4% tokens saved) + review generator |
@@ -240,7 +240,7 @@ A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the 
 
 Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 321 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 346 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
@@ -341,6 +341,31 @@ subtype (`INTRA_NODE_SYMBOL_DROPPED`, `INTRA_NODE_BODY_STUBBED`, `INTER_NODE_DIR
 of Gate A / C failure (`LOCKED`, `SYNTAX`, `EXPORT_REQUIRED`, `GUARD_INVARIANT`, `CALL_INVARIANT`,
 `FRAME_INVARIANT`, `EXECUTION_BUDGET`). A human reads the receipt without the kernel; a sync's
 verdict is remembered per process (`StateKernel.refusals`) so the Stop names the same code.
+
+**Incremental analysis** — A commit analyses the staged module against the module the session
+holds, in *segments*: a top-level def, a class shell (its `class` line, attributes and nested
+classes) and each `Class.method`. Segments whose text did not change, and that name no changed
+symbol, keep their mined invariants; only the affected segments are re-mined (`guard:` clauses,
+`call:` probes, branch invariants). A change at the module level (imports, constants) is a full
+analysis again. Gate C follows the same **edit scope**: a runtime `call:` probe or a structural
+guard whose owning segment is outside the scope is untouched by definition and is not re-run,
+so the sandbox is never loaded for an edit that cannot reach a probe; hand-written invariants
+always run. `StateKernel.perf_stats()` counts what was mined, reused and skipped.
+
+**Analysis cache** — The facts that depend on a file's text alone (exports, decorator and
+symbol fingerprints, mined invariants, the names it calls) are content-addressed
+(`sha256(rules version + path + source)`) in memory and under `<root>/.stepcheck/cache/analysis/`;
+what depends on the rest of the project (dependencies, `call:<imported>` fingerprints) is
+recomputed on every call. An ephemeral kernel (`stepcheck ci`) reads the cache but writes
+nothing under the tree.
+
+**File discovery** — `tracked_files` skips generated and vendored code by pattern
+(`migrations/`, `*_pb2.py`, `*_pb2_grpc.py`, `*.min.js`, `*.d.ts`, `*.generated.*`, `vendor/`,
+`dist/`, `build/`, `.next/`, `target/`, `node_modules/`) and, inside a git repository, everything
+`.gitignore` hides (`git ls-files --cached --others --exclude-standard`). A file the running
+Python cannot parse (a newer grammar such as PEP 695 `type X = …`, or more than the parser's 100
+indentation levels) is left untracked instead of aborting the index; growing a tracked file past
+those limits is a Gate A verdict.
 
 **Compliance Statement** — `stepcheck compliance` leads with `attestation.intoto.json`: a standard
 in-toto Statement v1 (`_type` `https://in-toto.io/Statement/v1`, `predicateType`

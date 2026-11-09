@@ -78,6 +78,31 @@ of Gate A / C failure (`LOCKED`, `SYNTAX`, `EXPORT_REQUIRED`, `GUARD_INVARIANT`,
 `FRAME_INVARIANT`, `EXECUTION_BUDGET`). A human reads the receipt without the kernel; a sync's
 verdict is remembered per process (`StateKernel.refusals`) so the Stop names the same code.
 
+**Incremental analysis** — A commit analyses the staged module against the module the session
+holds, in *segments*: a top-level def, a class shell (its `class` line, attributes and nested
+classes) and each `Class.method`. Segments whose text did not change, and that name no changed
+symbol, keep their mined invariants; only the affected segments are re-mined (`guard:` clauses,
+`call:` probes, branch invariants). A change at the module level (imports, constants) is a full
+analysis again. Gate C follows the same **edit scope**: a runtime `call:` probe or a structural
+guard whose owning segment is outside the scope is untouched by definition and is not re-run,
+so the sandbox is never loaded for an edit that cannot reach a probe; hand-written invariants
+always run. `StateKernel.perf_stats()` counts what was mined, reused and skipped.
+
+**Analysis cache** — The facts that depend on a file's text alone (exports, decorator and
+symbol fingerprints, mined invariants, the names it calls) are content-addressed
+(`sha256(rules version + path + source)`) in memory and under `<root>/.stepcheck/cache/analysis/`;
+what depends on the rest of the project (dependencies, `call:<imported>` fingerprints) is
+recomputed on every call. An ephemeral kernel (`stepcheck ci`) reads the cache but writes
+nothing under the tree.
+
+**File discovery** — `tracked_files` skips generated and vendored code by pattern
+(`migrations/`, `*_pb2.py`, `*_pb2_grpc.py`, `*.min.js`, `*.d.ts`, `*.generated.*`, `vendor/`,
+`dist/`, `build/`, `.next/`, `target/`, `node_modules/`) and, inside a git repository, everything
+`.gitignore` hides (`git ls-files --cached --others --exclude-standard`). A file the running
+Python cannot parse (a newer grammar such as PEP 695 `type X = …`, or more than the parser's 100
+indentation levels) is left untracked instead of aborting the index; growing a tracked file past
+those limits is a Gate A verdict.
+
 **Compliance Statement** — `stepcheck compliance` leads with `attestation.intoto.json`: a standard
 in-toto Statement v1 (`_type` `https://in-toto.io/Statement/v1`, `predicateType`
 `https://stepcheck.dev/attestation/v1`) whose `subject[]` is every tracked file with its sha256 and
