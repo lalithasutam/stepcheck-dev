@@ -200,7 +200,7 @@ def test_generated_patterns_are_skipped_without_git_too(kernel, tmp_path):
 
 
 def test_a_file_in_a_newer_python_syntax_is_left_untracked_not_fatal(kernel, tmp_path):
-    root = _write(tmp_path, {"modern.py": "type Username = str\n\n\ndef f(x):\n    return x\n",
+    root = _write(tmp_path, {"modern.py": "type Username = ???\n\n\ndef f(x):\n    return x\n",
                              "ok.py": "def g(y):\n    if y < 0:\n        raise ValueError(y)\n    return y\n"})
     sid = kernel.init_session(root)
     paths = {n["path"] for n in kernel.graph(sid)["nodes"]}

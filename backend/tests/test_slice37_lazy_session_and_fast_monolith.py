@@ -266,7 +266,7 @@ def test_ci_passes_a_tree_with_an_unparsable_file_a_star_import_chain_and_an_abs
         "pkg/__init__.py": "from .a import *\n",
         "pkg/a.py": "def fa(x):\n    if x < 0:\n        raise ValueError(x)\n    return x\n",
         "consumer.py": "from pkg import fa\n\n\ndef run(v):\n    return fa(v)\n",
-        "modern.py": "type Username = str\n\n\ndef f(x):\n    return x\n",
+        "modern.py": "type Username = ???\n\n\ndef f(x):\n    return x\n",
         "envdep.py": ("import no_such_third_party_pkg_xyz\n\n\n"
                       "def g(x):\n    # okf-invariant: call:g(-1) raises ValueError\n"
                       "    if x < 0:\n        raise ValueError(x)\n    return x\n"),
