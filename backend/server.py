@@ -28,7 +28,7 @@ from typing import Any
 import json
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
@@ -111,11 +111,43 @@ async def _broadcast_mutation(session_id: str, gate_event: dict | None = None) -
 # ---------------------------------------------- Door 2: Streamable HTTP MCP
 
 
+class _FreshMCP(FastMCP):
+    """FastMCP whose every tool call first reconciles the kernel with the session files on
+    disk (`StateKernel.refresh_sessions`). Over HTTP the gateway's middleware has done so
+    already; over stdio (`stepcheck mcp`) this is the only place: the stdio server is its own
+    process next to the hooks' gateway, and the session files are what the two share."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        KERNEL.refresh_sessions()
+        return await super().call_tool(name, arguments)
+
+
+def run_stdio() -> None:
+    """Serve the six MCP tools on stdin / stdout (`stepcheck mcp`): what `.mcp.json` and
+    `.cursor/mcp.json` launch, so the server is there the moment the editor starts — no
+    listening port to wait for after a cold boot. stdout carries JSON-RPC and nothing else:
+    the protocol keeps private duplicates of the two pipes, while descriptor 0 becomes the
+    null device and descriptor 1 becomes stderr for everything else in the process — a child
+    the kernel starts (git, the Gate C sandbox) would otherwise inherit the protocol's stdin,
+    which on Windows blocks behind the transport's pending read, and anything a library
+    writes to the raw stdout would corrupt the stream."""
+    import sys
+
+    protocol_in, protocol_out = os.dup(0), os.dup(1)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+    os.dup2(2, 1)
+    sys.stdin = os.fdopen(protocol_in, "r", encoding="utf-8", newline="")
+    sys.stdout = os.fdopen(protocol_out, "w", encoding="utf-8", newline="")
+    _build_mcp().run(transport="stdio")
+
+
 def _build_mcp() -> FastMCP:
     """Fresh FastMCP per app startup — its StreamableHTTPSessionManager only
     runs once per instance, and the FastAPI lifespan may re-enter (tests,
     reloads)."""
-    m = FastMCP(
+    m = _FreshMCP(
         "stepcheck-dev",
         stateless_http=True,
         streamable_http_path="/",
@@ -607,13 +639,18 @@ if STUDIO_DIST.exists():
 
 
 @app.post("/v1/step/hook")
-async def step_hook(request: Request) -> dict:
+async def step_hook(request: Request, response: Response) -> dict:
     """Warm fast path for Claude Code lifecycle hooks. The installed hook script
     (`stepcheck hooks`) relays its stdin JSON here and prints the answer, so a
     `PreToolUse` Read of a big tracked module comes back as the `focus=[]`
     skeleton, an Edit of a LOCKED module is denied with the Gate A diagnostic,
     and `Stop` is blocked while DIRTY_OMISSION_RISK nodes remain — all against
-    the in-memory kernel, no interpreter start-up. Policy: hooks.decide."""
+    the in-memory kernel, no interpreter start-up. Policy: hooks.decide. The body is
+    the hook answer and nothing else (an allow is `{}`); the gateway's identity rides in
+    the response headers (`X-StepCheck-Build` = the `kernel_build_id` of the code this
+    process loaded, `X-StepCheck-Pid`, `X-StepCheck-Daemon`), which the relay reads to
+    replace a daemon whose build id no longer matches the code on disk. `SessionStart`
+    alone also carries the full identity in its body (`stepcheck_gateway`)."""
     import hooks
 
     try:
@@ -621,11 +658,12 @@ async def step_hook(request: Request) -> dict:
     except ValueError:
         event = {}
     event = event if isinstance(event, dict) else {}
+    response.headers["X-StepCheck-Build"] = BUILD_ID
+    response.headers["X-StepCheck-Pid"] = str(os.getpid())
+    response.headers["X-StepCheck-Daemon"] = "1" if os.environ.get("STEPCHECK_DAEMON") == "1" else "0"
     out = hooks.decide(event, KERNEL)
     if event.get("hook_event_name") == "SessionStart":
-        # Identity for the relay's staleness guard; the relay strips this key.
-        out = dict(out, stepcheck_gateway={"pid": os.getpid(), "started": STARTED_AT,
-                                           "daemon": os.environ.get("STEPCHECK_DAEMON") == "1"})
+        out = dict(out, stepcheck_gateway=gateway_identity())
     return out
 
 
@@ -736,6 +774,37 @@ async def team_summary(request: Request, project_root: str | None = None) -> dic
     roots = [Path(project_root)] if project_root else None
     tier = licensing.held_tier(request.headers.get(licensing.HEADER))
     return ledger.summarize(KERNEL, roots, tier=tier, enforcement=licensing.enforcement_enabled())
+
+
+def gateway_identity() -> dict:
+    """Who is answering: pid, start time, daemon flag and the build id of the kernel code
+    this process imported (`kernel.build_id()` at import time; the code on disk may have
+    moved on since — that is exactly what the relay and `/health` let a client detect).
+    Hashing the backend costs a few milliseconds, so this is for `/health`, not the hook path."""
+    import kernel as _kernel
+
+    return {"pid": os.getpid(), "started": STARTED_AT, "daemon": os.environ.get("STEPCHECK_DAEMON") == "1",
+            "build_id": BUILD_ID, "build_id_on_disk": _kernel.build_id()}
+
+
+BUILD_ID = __import__("kernel").build_id()  # the code this process loaded; fixed for its lifetime
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Liveness plus identity: `kernel_build_id` is the code this gateway runs,
+    `kernel_build_id_on_disk` the code `stepcheck` would run if started now; a client
+    that sees them differ is talking to stale RAM and should restart the daemon."""
+    ident = gateway_identity()
+    try:
+        from importlib.metadata import version
+
+        ver = version("stepcheck-dev")
+    except Exception:  # noqa: BLE001 — a checkout without installed metadata
+        ver = "unknown"
+    return {"status": "ok", "version": ver, "pid": ident["pid"], "started": ident["started"], "daemon": ident["daemon"],
+            "kernel_build_id": ident["build_id"], "kernel_build_id_on_disk": ident["build_id_on_disk"],
+            "stale": ident["build_id"] != ident["build_id_on_disk"]}
 
 
 if __name__ == "__main__":

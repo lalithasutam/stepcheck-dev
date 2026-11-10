@@ -119,18 +119,60 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def write_cursor_mcp(root: Path, base_url: str) -> str:
-    """Merge the StepCheck server into `.cursor/mcp.json` (Cursor's `url` form)."""
+def mcp_stdio_entry(python: str | None = None) -> dict:
+    """The MCP server entry `connect` writes: a stdio command (`<python> <cli.py> mcp`) run by
+    the interpreter that has StepCheck installed. The editor launches it itself, so it connects
+    on a cold boot; an `http://127.0.0.1:8420/mcp/` entry is refused until a gateway listens."""
+    return {"command": (python or sys.executable).replace("\\", "/"), "args": [_cli_path(), "mcp"]}
+
+
+def write_mcp_json(root: Path) -> str:
+    """Merge the StepCheck stdio server into `<root>/.mcp.json` (Claude Code)."""
+    path = root / ".mcp.json"
+    data = _read_json(path)
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        servers = data["mcpServers"] = {}
+    servers["stepcheck"] = {"type": "stdio", **mcp_stdio_entry()}
+    rendered = json.dumps(data, indent=2) + "\n"
+    if not path.exists() or path.read_text(encoding="utf-8") != rendered:
+        path.write_text(rendered, encoding="utf-8", newline="\n")
+    return "wired stepcheck -> stdio (`stepcheck mcp`)"
+
+
+def write_cursor_mcp(root: Path, base_url: str | None = None) -> str:
+    """Merge the StepCheck stdio server into `.cursor/mcp.json` (Cursor's `command` form).
+    `base_url` is accepted for callers of the earlier `url` form and unused."""
     path = root / ".cursor" / "mcp.json"
     data = _read_json(path)
     servers = data.setdefault("mcpServers", {})
-    servers["stepcheck"] = {"url": f"{base_url}/mcp/"}
+    servers["stepcheck"] = mcp_stdio_entry()
     rendered = json.dumps(data, indent=2) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_text(encoding="utf-8") != rendered:
         path.write_text(rendered, encoding="utf-8", newline="\n")
-        return f"wired stepcheck -> {base_url}/mcp/"
+        return "wired stepcheck -> stdio (`stepcheck mcp`)"
     return "already wired (no change)"
+
+
+def register_interpreter(backend: Path, python: str | None = None) -> None:
+    """Record, per backend directory, the interpreter that can import StepCheck's
+    dependencies (`$STEPCHECK_HOME/interpreters.json`). The hook relay runs as whatever
+    `python` is first on PATH — after a reboot that is often not the virtualenv StepCheck
+    lives in — and starts the gateway, and the in-process gates, with the recorded one."""
+    home = Path(os.environ.get("STEPCHECK_HOME") or Path.home() / ".stepcheck")
+    path = home / "interpreters.json"
+    data = _read_json(path)
+    key = os.path.normcase(os.path.abspath(str(backend)))
+    value = python or sys.executable
+    if data.get(key) == value:
+        return
+    data[key] = value
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    except OSError:
+        pass
 
 
 def remove_cursor_mcp(root: Path) -> str:

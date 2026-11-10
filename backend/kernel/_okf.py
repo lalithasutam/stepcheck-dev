@@ -529,7 +529,8 @@ def _incremental_mined(tree: ast.Module, source: str, previous: ModuleInfo, manu
 
 
 def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str] | set[str], *,
-            previous: ModuleInfo | None = None, tree: ast.Module | None = None, mine: bool = True) -> ModuleInfo:
+            previous: ModuleInfo | None = None, tree: ast.Module | None = None, mine: bool = True,
+            run_probes: bool = True) -> ModuleInfo:
     """Parse one module into its OKF facts. Raises SyntaxError on broken source.
     `previous` (the same file's last analysis) makes the mining incremental: only the
     top-level symbols the edit can affect are re-mined; the content-addressed cache
@@ -542,14 +543,20 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
     fingerprinted per dotted symbol (`@width.setter on Box.width`). A decorator a
     symbol carries more than once — `@overload` on each signature of an overload
     set — is counted (`@overload on f x2`, `x3`, …), so losing one of the blocks
-    is an omission too."""
+    is an omission too.
+    `run_probes=False` is the structural analysis a judgement without runtime probes
+    holds a module to: every guard clause as a `guard:` invariant — the leading guards
+    a `call:` probe would normally own included — and neither the probe miner nor the
+    branch miner runs; it lives under its own cache key, so it never answers (or is
+    answered by) a full analysis. `mine=False` is the staged side of such a judgement:
+    the facts without any mined invariant, never cached."""
     _mod = lang_module(path)
     if _mod is not None:
         return _mod.analyze(node_id, path, source, project_modules)
     if tree is None:
         tree = parse_cached(source)
     modules = project_modules if isinstance(project_modules, dict) else {m: m for m in project_modules}
-    key = _content_key(path, source)
+    key = _content_key(path, source) + ("" if run_probes else "-structural")
     facts = _recall(key)
     if facts is None and not mine:
         # `mine=False` (a structural judgement of a transition): the facts without any mined
@@ -557,6 +564,13 @@ def analyze(node_id: str, path: str, source: str, project_modules: dict[str, str
         exports, preserved_base = top_level_facts(tree)
         called, statements = _call_and_import_facts(tree, source)
         facts = (exports, preserved_base, harvest_invariants(source), [], called, statements)
+    if facts is None and not run_probes:
+        exports, preserved_base = top_level_facts(tree)
+        manual = harvest_invariants(source)
+        mined = _dedup_mined(mine_structural_guards(tree, covered=set()), manual)  # every guard, structurally; no probe runs
+        called, statements = _call_and_import_facts(tree, source)
+        facts = (exports, preserved_base, manual, mined, called, statements)
+        _remember(key, facts)
     if facts is None:
         exports, preserved_base = top_level_facts(tree)
         manual = harvest_invariants(source)

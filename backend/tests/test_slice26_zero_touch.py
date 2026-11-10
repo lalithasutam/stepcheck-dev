@@ -127,6 +127,7 @@ def test_stepcheck_connect_wires_hooks_mcp_and_session_idempotently(project, cap
     out = capsys.readouterr().out
     assert ".mcp.json" in out and "session" in out
     mcp = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
-    assert mcp["mcpServers"]["stepcheck"]["url"].endswith("/mcp/")
+    entry = mcp["mcpServers"]["stepcheck"]  # Slice 39: stdio, so a cold boot never meets a refused port
+    assert entry["type"] == "stdio" and entry["args"][-1] == "mcp" and "url" not in entry
     assert (project / ".claude" / "settings.json").exists()
     assert (project / ".claude" / "hooks" / "stepcheck_hook.py").exists()

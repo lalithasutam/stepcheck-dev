@@ -11,3 +11,5 @@ frontend/tsconfig.tsbuildinfo
 .claude/settings.local.json
 build/
 dist/
+.mcp.json
+.cursor/mcp.json

@@ -1,12 +1,21 @@
 # StepCheck Dev — launch kit
 
+**v0.4.0 in one breath:** `stepcheck retro . --commits 50` replays a repository's own history through the
+gates and names the silent regressions each commit landed (structural, parallel, 3.8 s for 106 file
+transitions on this repo); `stepcheck diff --base origin/main...HEAD --markdown` and `action.yml` do the same
+for a pull request; `stepcheck allow <file> <symbol> --reason` is the human-approved escape hatch for
+native-tool hooks (an agent requesting it from its own shell is asked, never trusted); `stepcheck connect`
+wires a git `pre-commit` gate and Cursor alongside Claude Code; and the kernel now scales to a 535k-LOC tree
+(2.8 s index, 1.0 MB session, 24 ms p50 Edit hook, 49 ms one-function commit on an 8,165-LOC module) with a
+`kernel_build_id` handshake so a stale daemon never answers.
+
 Every number below is read from the repo as it stands, not rounded up:
 
 | Metric | Value | Source |
 | --- | --- | --- |
 | Kernel + gateway + CLI + audit | ≈7,400 LOC (`cat backend/kernel/*.py backend/server.py backend/cli.py backend/audit.py \| wc -l`) | `wc -l` |
 | License | Apache-2.0 (`LICENSE`, `NOTICE`, `pyproject.toml`); the whole repo is the open core | `LICENSE` |
-| Tests | 376, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
+| Tests | 386, all at the public seams (kernel API, HTTP/MCP, CLI), zero mocks of internals, ~20–50 s depending on OS (includes the live 50-turn benchmark gate, a real uvicorn MCP round-trip, self-hosted compaction and latency budgets, and a 10-class fault matrix) | `python -m pytest -q` |
 | 50-turn benchmark | 120,815 raw → 14,048 compacted tokens, 88.4% saved, $0.3203 at $3.00/MTok | `benchmarks/results.json` |
 | Real-log audit | 131 Claude Code sessions, 7,612 assistant turns, 95 cache-cliff resumes re-writing 5,876,819 tokens, $15.87 paid above cache-read price | `docs/audit.html` (file names and session IDs anonymized) |
 | Catches | T20 Gate B `INTRA_NODE_SYMBOL_DROPPED` · T25 Gate B `INTER_NODE_DIRTY` (accepted, `api`+`workers` dirtied, finalize blocked) · T35 Gate C `call:charge(account="x", amount_cents=0) raises ValueError` (auto-mined — payments.py has no annotations) · T36 Gate A locked mutation | `stepcheck benchmark` |
@@ -96,15 +105,15 @@ Correctness: every commit runs three gates before it lands.
 
 A passing commit appends a DSSE-style SHA-256 envelope to the frame. Replay the same session on another machine and you get byte-identical envelopes.
 
-Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and a Streamable HTTP MCP server at `/mcp` for Claude Code / Cursor. One port, `stepcheck up`.
+Two doors: a BYOK proxy for `/v1/chat/completions` and `/v1/messages` that prunes dead-end turns and injects the compact frame, and an MCP server for Claude Code / Cursor — a stdio command (`stepcheck mcp`) the editor launches itself, also served as Streamable HTTP at `/mcp` by the optional warm gateway (`stepcheck up`, one port).
 
-Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 376 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
+Numbers: my synthetic 50-turn benchmark on a 6-module repo sends 14,048 tokens where the raw agent sends 120,815 (88.4% less), and it catches all four injected faults — T20 silent `@audit` drop, T25 signature change dirtying two dependents and blocking finalize, T35 guard removed with identical statement count, T36 mutation of a locked module. It's my benchmark, so read it as a ceiling, not a promise: `stepcheck benchmark` reproduces it and the replay below lets you scrub every turn. 386 tests at the two public seams, zero mocks of internals, CI green on Ubuntu and Windows.
 
 Try it in 60 seconds (the audit needs no server and prints your own number):
 
     pipx install git+https://github.com/lalithasutam/stepcheck-dev
     stepcheck audit        # your cache-cliff waste + Read-tool bloat from ~/.claude/projects
-    stepcheck up           # then: claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/
+    stepcheck connect .    # in your repo: hooks + the stdio MCP server (`stepcheck mcp`) in .mcp.json + a pre-commit gate
 
 Honest limits: Gate C exec-loads the agent's staged module in an isolated namespace under a step/time guard — that is not a security sandbox, so run the gateway in a container for untrusted agents. The executable `call:` invariants are Python-only; TypeScript/JavaScript, Go, Rust and Java get the same three gates with structural guards and signature contracts instead. And the benchmark is mine.
 
@@ -145,7 +154,7 @@ C logical (invariants over normalized src, the AST, and the exec-loaded module)
 
 6/ T25 is the one I like. Legit signature change on payments.charge. Accepted. But api and workers go amber (DIRTY_OMISSION_RISK) and finalize is refused until both are re-verified. The thing agents never do on their own.
 
-7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 376 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
+7/ Every passing commit gets a DSSE-style SHA-256 envelope. Deterministic across machines. ~4,900 LOC, 386 tests at two seams, no mocks of internals, CI green on Ubuntu + Windows. Apache-2.0.
 
 8/ Try the interactive replay, no install, works on your phone: https://lalithasutam.github.io/stepcheck-dev/
 Repo: https://github.com/lalithasutam/stepcheck-dev
@@ -157,7 +166,7 @@ Repo: https://github.com/lalithasutam/stepcheck-dev
 
 Long sessions in Claude Code and Cursor have two problems that feed each other: the context fills with stale re-reads (and past the 5-minute cache window you pay full price for every one), and somewhere around turn 30 the model stops actually reading the code it's editing and drops something it shouldn't. A deleted decorator, a removed guard clause. Syntax is fine, tests still pass.
 
-StepCheck is an MCP server (Streamable HTTP, `/mcp`) plus a BYOK proxy that sits between the agent and the model. The agent checks out one module frame at a time as an AST skeleton with only the function it's editing in full, commits a small AST patch, and the kernel runs three deterministic gates before anything lands: mechanical, omission (symbol fingerprinting + dependency dirty propagation), and logical (callable invariants like `call:charge("acct", 0) raises ValueError` executed against the staged module in an isolated namespace).
+StepCheck is an MCP server (stdio, `stepcheck mcp`) plus a BYOK proxy that sits between the agent and the model. The agent checks out one module frame at a time as an AST skeleton with only the function it's editing in full, commits a small AST patch, and the kernel runs three deterministic gates before anything lands: mechanical, omission (symbol fingerprinting + dependency dirty propagation), and logical (callable invariants like `call:charge("acct", 0) raises ValueError` executed against the staged module in an isolated namespace).
 
 Numbers from the 50-turn benchmark in the repo, not estimates: 120,815 raw tokens → 14,048 sent (88.4%). Four injected events, four caught: T20 silent `@audit` drop (Gate B), T25 signature change dirtying two dependents and blocking finalize (Gate B propagation), T35 guard removed with identical statement count (Gate C), T36 mutation of a locked module (Gate A).
 
@@ -165,12 +174,14 @@ Numbers from the 50-turn benchmark in the repo, not estimates: 120,815 raw token
 
 **Hook it up to Claude Code:**
 ```
-claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/
+stepcheck connect .                          # writes .mcp.json (stdio) + hooks; or by hand:
+claude mcp add stepcheck -- stepcheck mcp
 ```
-**Cursor:** add to `.cursor/mcp.json`:
+**Cursor:** `stepcheck connect . --cursor`, or add to `.cursor/mcp.json`:
 ```json
-{ "mcpServers": { "stepcheck": { "url": "http://127.0.0.1:8420/mcp/" } } }
+{ "mcpServers": { "stepcheck": { "command": "stepcheck", "args": ["mcp"] } } }
 ```
+The editor starts the server itself, so there is no port to wait for. `stepcheck up` is optional: a warm daemon for the hooks, the proxy and the Studio UI.
 Tools exposed: `init_project_session`, `checkout_context_frame`, `commit_verified_step`, `lock_module_invariants`, `check_omission_risks`, `get_token_savings`.
 
 Honest limits: callable invariants execute the agent's staged code in-process (isolated namespace with a step/time guard, not a security sandbox; containerize for untrusted agents). The executable `call:` invariants are Python-only; TypeScript/JavaScript, Go, Rust and Java get the structural guards and signature contracts. Feedback on the invariant syntax is what I most want.
@@ -201,13 +212,13 @@ Link straight to a moment with the hash: `#t20`, `#t25`, `#t35`, `#t36`. Regener
 ```bash
 cd stepcheck-dev && pip install -e . && (cd frontend && npm install && npm run build) && (cd backend && python -m pytest -q) && stepcheck up
 ```
-Expect `376 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
+Expect `386 passed`, then the gateway banner. Open http://127.0.0.1:8420/studio/ for the Studio UI; it's in demo replay until you pass `?session=<id>` from `POST /v1/step/init`.
 
 **2. Connect Claude Code (or Cursor) to the MCP server** (second terminal)
 ```bash
-claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/ && claude
+stepcheck connect . && claude
 ```
-In the session: ask it to call `init_project_session` on a Python repo path, then `checkout_context_frame` with a focus and `commit_verified_step` with a patch. For Cursor, put `{"mcpServers":{"stepcheck":{"url":"http://127.0.0.1:8420/mcp/"}}}` in `.cursor/mcp.json` instead.
+`connect` wires the stdio server (`stepcheck mcp`) into `.mcp.json`, so it connects whether or not the gateway from step 1 is running (`claude mcp add stepcheck -- stepcheck mcp` does the same by hand). In the session: ask it to call `init_project_session` on a Python repo path, then `checkout_context_frame` with a focus and `commit_verified_step` with a patch. For Cursor, `stepcheck connect . --cursor` writes `{"mcpServers":{"stepcheck":{"command":"…","args":["…","mcp"]}}}` to `.cursor/mcp.json`.
 
 **2a. Gate a PR headlessly** — `stepcheck ci backend` re-runs every module through Gates A/B/C, executes all mined and hand-written invariants, and refuses attestation drift or `DIRTY_OMISSION_RISK` nodes with exit 1; `.github/workflows/ci.yml` does this on Ubuntu + Windows for every push and PR.
 

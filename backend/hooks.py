@@ -455,7 +455,8 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
     if event.get("stop_hook_active"):
         return {}  # already blocked once this turn; never loop
     explicit = event.get("stepcheck_session_id")
-    candidates = [(explicit, None)] if explicit else sessions_for(Path(event.get("cwd") or os.getcwd()))
+    cwd = Path(event.get("cwd") or os.getcwd())
+    candidates = [(explicit, None)] if explicit else active_sessions_for(cwd)
     roots = dict(registry())
     dirty: dict[str, list[str]] = {}
     rejected: dict[str, list[str]] = {}
@@ -484,6 +485,15 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
                     gate, code = "B", "REJECTED"
                     what = "the bytes on disk failed a gate earlier and were not adopted"
                 catches.append((sid, nid, "REJECTED", gate, code, banner(gate, nid, "REJECTED", what)))
+    if not explicit:
+        import kernel as _kernel  # the turn is ending: older clean sessions of these roots retire
+
+        for _sid, root in candidates:
+            if root is not None:
+                try:
+                    _kernel.prune_sessions(root)
+                except OSError:
+                    pass
     if not dirty and not rejected:
         return {}
     for sid, module, symbol, gate, code, text in catches:
@@ -512,11 +522,11 @@ def _stop(event: dict, kernel: StateKernel) -> dict:
 def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
     """Adopt the bytes an Edit / Write just wrote, through the gates, so the session
     (and `stepcheck ci`) is current the moment the tool returns. A Bash command may
-    have written anything: every registered session for the cwd is synced whole,
-    and a file the gates refuse is reported (the Stop hook then blocks on it)."""
+    have written anything: the active session of each root under the cwd is synced
+    whole, and a file the gates refuse is reported (the Stop hook then blocks on it)."""
     if event.get("tool_name") == "Bash":
         explicit = event.get("stepcheck_session_id")
-        candidates = [(explicit, None)] if explicit else sessions_for(Path(event.get("cwd") or os.getcwd()))
+        candidates = [(explicit, None)] if explicit else active_sessions_for(Path(event.get("cwd") or os.getcwd()))
         roots = dict(registry())
         refused: list[str] = []
         for sid, _root in candidates:
@@ -585,6 +595,8 @@ def _post_tool_use(event: dict, kernel: StateKernel) -> dict:
 def decide(event: dict, kernel: StateKernel) -> dict:
     """The hook answer for one lifecycle event, or {} for "no opinion"."""
     name = event.get("hook_event_name") or ("Stop" if "stop_hook_active" in event else "PreToolUse")
+    if name in ("Stop", "PostToolUse", "SessionStart") or event.get("tool_name") in EDIT_TOOLS:
+        bind_chat(event, kernel)  # a Read stays on the fast path; the chat's first gated event binds it
     if name == "Stop":
         return _stop(event, kernel)
     if name == "PreToolUse":
@@ -592,3 +604,107 @@ def decide(event: dict, kernel: StateKernel) -> dict:
     if name == "PostToolUse":
         return _post_tool_use(event, kernel)
     return {}
+
+
+def active_sessions_for(path: Path) -> list[tuple[str, Path]]:
+    """The session that speaks for each registered root containing `path`: the newest one.
+    Older sessions of the same root are history — idle views of an earlier tree — and do
+    not answer the hooks, so a committed HEAD they never saw cannot be flagged by them."""
+    newest: dict[Path, str] = {}
+    for sid, root in sessions_for(path):  # oldest first: the last one per root wins
+        newest[root] = sid
+    return [(sid, root) for root, sid in newest.items()]
+
+
+CHAT_STATE = Path(".stepcheck") / "chat.json"
+
+
+def _committed_text(root: Path, rel: str) -> str | None:
+    """The file as git HEAD holds it; None when there is no repository, the path is not
+    committed, or git is missing."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", str(root), "show", f"HEAD:./{rel.replace(chr(92), '/')}"],
+                             capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return _okf.decode_source(out.stdout).replace("\r\n", "\n")
+    except UnicodeError:
+        return None
+
+
+def reconcile_committed(kernel: StateKernel, sid: str, root: Path) -> list[str]:
+    """Bring a session an earlier chat left behind up to the committed tree: every node the
+    session holds REJECTED whose bytes on disk are exactly what git HEAD holds is adopted as
+    the baseline it now is (a declared commit), and a dependent that adoption turned DIRTY is
+    re-verified the same way when its own bytes are committed too. A file that differs from
+    HEAD — an uncommitted write the gates refused — stays REJECTED, and a dependent that was
+    DIRTY before stays DIRTY: those are still this tree's open risks. Returns the adopted ids."""
+    try:
+        kernel.sync(sid)
+        rejected = list(kernel.omission_report(sid)["rejected"])
+        if not rejected:
+            return []
+        paths = kernel.node_paths(sid)
+    except KeyError:
+        return []
+
+    def adopt(nid: str):
+        rel = paths.get(nid)
+        if rel is None:
+            return None
+        try:
+            disk = _okf.decode_source((root / rel).read_bytes()).replace("\r\n", "\n")
+        except (OSError, UnicodeError):
+            return None
+        if _committed_text(root, rel) != disk:
+            return None
+        verdict = kernel.commit(sid, nid, source=disk, allow_deletion=True)
+        return verdict if verdict.accepted else None
+
+    adopted: list[str] = []
+    dirtied: list[str] = []
+    for nid in rejected:
+        verdict = adopt(nid)
+        if verdict is not None:
+            adopted.append(nid)
+            dirtied += [d for d in verdict.dirtied if d not in dirtied]
+    still_dirty = set(kernel.omission_report(sid)["dirty"])
+    for nid in dirtied:
+        if nid in still_dirty and adopt(nid) is not None:
+            adopted.append(nid)
+    return adopted
+
+
+def bind_chat(event: dict, kernel: StateKernel) -> None:
+    """Bind the active session of each root under the event's cwd to the Claude chat that sent
+    it (`session_id`), in `<root>/.stepcheck/chat.json`. When a different chat takes over — a
+    new conversation, or the first one after an upgrade — the session it inherits is reconciled
+    with the committed tree first (`reconcile_committed`), so a baseline an earlier chat left
+    behind cannot veto commits, checkouts and resets that happened between chats. Within one
+    chat nothing is reconciled: a commit the agent makes itself is gated like any write."""
+    chat = event.get("session_id")
+    if not chat or event.get("stepcheck_session_id"):
+        return
+    for sid, root in active_sessions_for(Path(event.get("cwd") or os.getcwd())):
+        state_file = root / CHAT_STATE
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if isinstance(state, dict) and state.get("chat") == chat and state.get("session") == sid:
+            continue
+        inherited = not isinstance(state, dict) or state.get("chat") != chat
+        try:
+            state_file.write_text(json.dumps({"chat": chat, "session": sid}) + "\n", encoding="utf-8", newline="\n")
+        except OSError:
+            continue  # nothing recorded: never reconcile on every call
+        if inherited:
+            try:
+                reconcile_committed(kernel, sid, root)
+            except (OSError, ValueError):
+                pass

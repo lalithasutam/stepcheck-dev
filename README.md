@@ -55,13 +55,36 @@ Receipt: `.stepcheck/discovery/receipts/skylos_vs_stepcheck.json` (script `bench
 Licensing is opt-in (`STEPCHECK_REQUIRE_KEY=1`); with it unset everything in this repository runs locally with no
 key. Ubiquitous language and the two public testing seams live in `GLOSSARY.md`.
 
+## New in v0.4.0 — the gates leave the editor
+
+- **`stepcheck retro . --commits 50`** — the git time machine: every commit's modified modules go through
+  Gates B/C against their parent blob, structurally and in parallel; silent regressions (a guard dropped,
+  flipped or neutered, a handler widened, a body stubbed, a decorator stripped) are listed by commit, file and
+  symbol with the before/after guard. On this repository's own last 30 commits: 106 transitions, 2,075 guards,
+  3.8 s, and the findings are exactly the contract changes that were declared on the way in.
+- **`stepcheck diff --staged | --base origin/main...HEAD --markdown`** — the same judgement for the index, the
+  working tree or a pull request; `action.yml` posts the table to the job summary and fails the check.
+- **`stepcheck allow <file> <symbol> --reason`** — the human-sovereign escape hatch for native-tool hooks: one
+  declared contract change, bound to the file's bytes, consumed by one edit; an agent asking for it from its own
+  shell gets `permissionDecision: "ask"`, so a person approves the drop, never the model.
+- **Universal wiring** — `stepcheck connect` installs a git `pre-commit` gate (chains your existing hook) and
+  Cursor's `mcp.json` next to the Claude Code hooks, so Cursor, Windsurf, Copilot, Aider and plain editors are
+  protected at commit time; `disconnect` undoes it.
+- **Scale** — lazy sessions, stitched single-function commits and a parse-once ci: the full django tree
+  (2,889 files, 535k LOC) indexes in 2.8 s with a 1.0 MB session, the PreToolUse Edit hook answers in 24 ms
+  p50, and a one-function commit on an 8,165-LOC module takes 49 ms; a zero-trust bisimulation of 233 edits
+  shows 0 divergences between the fast path and a cold full analysis.
+- **Coherence** — the gateway reports a `kernel_build_id` on `/health` and every hook answer; a daemon running
+  older code is replaced before it can answer from stale RAM, and only the newest session of a repository speaks
+  for it (older ones are pruned).
+
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `backend/kernel/` | **StateKernel** (Seam 1): OKF graph compilation, bounded `checkout(focus=)` with AST skeleton slicing, 3-tier gated `commit(source= \| patch=)` with diff folding (A mechanical/locked · B omission · C semantic invariants over `src`/`tree`/`ns`, auto-mined from leading `if …: raise` guards with zero annotations), DSSE/SHA-256 attestation, draft GC, cache-cliff telemetry |
 | `backend/server.py` | **DualDoorGateway** (Seam 2): Door 1 firewall proxy (`/v1/chat/completions`, `/v1/messages`, BYOK or dry-run) with three-band accordion compaction and opt-in tier routing, Door 2 REST `/v1/step/*` (incl. the warm `POST /v1/step/hook` lifecycle-hook evaluator) + FastMCP Streamable HTTP at `/mcp` + `WS /v1/ws/{session_id}` |
-| `backend/tests/` | 376 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
+| `backend/tests/` | 386 tests, all at the two seams, zero mocks of internals (incl. the 50-turn ≥85% benchmark gate, self-hosted compaction floors, latency budgets, a 10-class fault-injection matrix, the wild-corpus hardening cases, dotted method slicing, multi-definition symbol groups, budget laundering and in-toto provenance) |
 | `frontend/` | StepCheck Studio: React + TS + Vite + Tailwind, @xyflow/react OKF graph (Pin & Lock), Monaco DiffEditor + attestation viewer, live gate feed + cost chart, WS-driven; replays a built-in demo session when no gateway is reachable |
 | `extension/` | VS Code / Cursor webview wrapper (`StepCheck: Open Studio`) |
 | `benchmarks/` | 50-turn coding-rot benchmark (events injected at T20/T25/T35/T36; 88.4% tokens saved) + review generator |
@@ -92,6 +115,7 @@ stepcheck retro . --commits 50   # the git time machine: every commit's modified
 stepcheck diff . [--staged | --base origin/main...HEAD] [--markdown]   # the working tree, the index or a PR against its baseline; exit 1 on a silent regression
 stepcheck allow <file> [symbol] --reason "..."   # declare one intended guard / symbol removal for the next native-tool edit (.stepcheck/declared.jsonl; consumed once)
 stepcheck connect .         # hooks + .mcp.json + session + a git pre-commit gate (`diff --staged`, chains your existing hook) + .cursor/mcp.json when .cursor/ exists; `disconnect` undoes it
+stepcheck mcp               # the MCP tools over stdio: what `connect` writes into .mcp.json / .cursor/mcp.json, so the server connects on a cold boot with no gateway listening
 ```
 
 `action.yml` is a composite GitHub Action: on a pull request it runs `stepcheck diff --base <base sha> --markdown`, writes the
@@ -124,9 +148,9 @@ deterministic SHA-256 scheme, not a key.
 
 ## Claude Code slash commands (work out of the box after cloning)
 
-`.claude/commands/` ships four project commands. They need the gateway running (`stepcheck up`) and the
-`stepcheck` MCP server connected (`claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/`);
-`CLAUDE.md` supplies the rules they enforce.
+`.claude/commands/` ships four project commands. They need the `stepcheck` MCP server connected: `stepcheck connect .`
+wires it as a stdio command (`stepcheck mcp`), or, with the gateway running (`stepcheck up`),
+`claude mcp add --transport http stepcheck http://127.0.0.1:8420/mcp/`; `CLAUDE.md` supplies the rules they enforce.
 
 | Command | What it does |
 | --- | --- |

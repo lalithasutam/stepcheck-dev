@@ -41,6 +41,21 @@ registry entry or tracked-file write-back is ever written — this is what `step
 The session file is *slim*: a node whose latest attestation (or the file on disk) still holds its
 text is stored as its facts without the source; a lazy node (below) as its path, hash and import
 edges only. The text comes back through the **baseline** on first use.
+**Active session / pruning:** the hooks answer for the **newest** session of each registered
+root under the cwd (`hooks.active_sessions_for`); older sessions are idle views of an earlier
+tree and never flag a HEAD they did not see. At the end of a turn (and from `stepcheck
+connect`) `kernel.prune_sessions(root, keep=3)` archives the clean, idle sessions beyond the
+three most recent to `<root>/.stepcheck/sessions_archive/` and drops them from the registry; a
+session that still holds DIRTY_OMISSION_RISK or REJECTED nodes is kept.
+**Kernel build id:** `kernel.build_id()` is sha256 over the path and bytes of every
+`backend/*.py` and `backend/kernel/*.py` (16 hex chars). A gateway reports the id it loaded on
+`/health` (`kernel_build_id`, with `kernel_build_id_on_disk` and `stale`) and in the response
+headers of every hook answer (`X-StepCheck-Build`, `X-StepCheck-Pid`, `X-StepCheck-Daemon`; the
+body stays the bare answer, so an allow is still `{}`, and only `SessionStart` also carries
+`stepcheck_gateway` in its body; a gateway whose answer carried no headers, such as a broken
+build failing before the endpoint runs, is asked on `/health` instead); the installed relay
+computes the same id from the code on disk and, when they differ, tells its own daemon to exit, warms a fresh one and decides the
+current call in-process — updated code never talks to old RAM.
 **Session refresh:** `refresh_sessions()` reconciles memory with disk — a session whose file was
 archived or deleted is evicted (its next use is the `KeyError` of an unknown id), and one whose file
 another process rewrote (newer `mtime_ns`, bytes not this process's own last write) is reloaded.
@@ -212,11 +227,14 @@ flipped or neutered inside a surviving function, an exception handler widened or
 a body replaced by a stub, a decorator stripped from a surviving symbol) or **Tier 2**
 (structural removals — a whole symbol or signature gone, a mass deletion — counted in the
 footer, listed with `--all`); test files are skipped unless `--all`. `retro` is **structural by
-default** (`judge_transition(run_probes=False)`): every guard clause of the held text — the
-leading guards a runtime probe would own included — is held as a `guard:` invariant and the
-staged text is not mined, so the sandbox never loads (a historical blob has no sibling modules
-to import) and every Tier 1 catch is an AST fact; `--probes` adds the runtime `call:` checks,
-whose load failures are then counted, not reported. Transitions are independent and are judged
+default** (`judge_transition(run_probes=False)` → `_okf.analyze(run_probes=False)`, the
+**structural analysis**): every guard clause of the held text — the leading guards a runtime
+probe would own included, such as `if amount <= 0: raise` on a typed `def charge(amount: int)` —
+is held as a `guard:` invariant; neither the probe miner nor the branch miner runs on the held
+text, the staged text is not mined, the facts live under their own cache key (`…-structural`, so
+they never answer a full analysis), and the sandbox never loads (a historical blob has no
+sibling modules to import). Every Tier 1 catch is an AST fact; `--probes` adds the runtime
+`call:` checks, whose load failures are then counted, not reported. Transitions are independent and are judged
 by `--jobs` worker processes (default: cores up to 8). `stepcheck diff [path] [--staged] [--base <ref>] [--markdown] [--json]` judges the
 working tree, the index or a pull request (`A...B` is the merge base) the same way and exits 1
 on a Tier 1 finding or a parse failure; `--markdown` is the PR-comment table `action.yml` posts.

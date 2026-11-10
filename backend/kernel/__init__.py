@@ -434,11 +434,13 @@ class StateKernel:
         `stepcheck retro` runs on every commit of a history and `stepcheck diff` on a
         working tree. No dependent is in the session, so Gate A is the parse; Gates B and
         C run exactly as for a commit. `root` points the read-only analysis cache (and the
-        root package) at the project the file comes from. `run_probes=False` keeps Gate B
-        and every structural `guard:` invariant but leaves the runtime `call:` probes out,
-        so the sandbox is never loaded: a historical blob has no sibling modules to import,
-        and every structural catch (a guard dropped, flipped or neutered, a handler widened,
-        a body stubbed, a decorator stripped) needs no execution."""
+        root package) at the project the file comes from. `run_probes=False` holds the
+        module to its structural analysis (`_okf.analyze(run_probes=False)`): every guard
+        clause as a `guard:` invariant — the leading guards a runtime probe would own
+        included — with no probe mined or executed on either side, so the sandbox is never
+        loaded: a historical blob has no sibling modules to import, and every structural
+        catch (a guard dropped, flipped or neutered, a handler widened, a body stubbed, a
+        decorator stripped) needs no execution."""
         if not self._ephemeral:
             return StateKernel(ephemeral=True).judge_transition(path, before, after, allow_deletion=allow_deletion,
                                                                 root=root, run_probes=run_probes)
@@ -448,17 +450,15 @@ class StateKernel:
         self._point_cache(root_path)
         before, after = before.replace("\r\n", "\n"), after.replace("\r\n", "\n")
         try:
-            info = _okf.analyze(node_id, rel, before, _okf.module_map({node_id: rel}), mine=run_probes)
+            info = _okf.analyze(node_id, rel, before, _okf.module_map({node_id: rel}), run_probes=run_probes)
             if not run_probes and _okf.lang_module(rel) is None:
                 import dataclasses
 
-                # Every guard clause of the held text as a structural invariant — the leading
-                # guards a runtime probe would normally own included — plus the hand-written
-                # lines that need no loaded namespace. Nothing is mined from the staged text.
-                # (A TypeScript / Go / Rust / Java module's mined guards are structural already.)
-                guards = self.structural_guards(rel, before, root=root_path)
-                manual = [i for i in info.invariants if not i.startswith("call:") and re.search(r"\bns\b", i) is None]
-                info = dataclasses.replace(info, invariants=manual + guards, mined_invariants=guards)
+                # the structural analysis holds every guard clause already; of the hand-written
+                # lines, only those that need no loaded namespace stay
+                manual = [i for i in info.invariants if i not in info.mined_invariants
+                          and not i.startswith("call:") and re.search(r"\bns\b", i) is None]
+                info = dataclasses.replace(info, invariants=manual + list(info.mined_invariants))
         except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
             return CommitVerdict(accepted=False, gate="A", error=_as_mechanical(exc, node_id), attestation=None, dirtied=[])
         s = _Session(session_id=f"sk-judge-{uuid.uuid4().hex[:12]}", root=root_path, nodes={node_id: _Node(info=info)},
@@ -1481,3 +1481,63 @@ def _in_toto_envelope(session_id: str, info: _okf.ModuleInfo, latest: dict, coun
             {"keyid": _DSSE_KEYID, "sig": _sha256(f"DSSEv1 {_IN_TOTO_PAYLOAD_TYPE} {canonical}")}
         ],
     }
+
+
+def build_id(backend=None) -> str:
+    """A deterministic id of the kernel code a process runs: sha256 over the path and
+    bytes of every `backend/*.py` and `backend/kernel/*.py` under `backend` (a str or Path;
+    default: this package's parent), 16 hex characters. The gateway reports it on `/health`
+    and in the `X-StepCheck-Build` header of every hook answer; the installed relay computes
+    the same id from the code on disk and replaces a daemon whose id no longer matches."""
+    import hashlib
+
+    base = Path(backend).resolve() if backend else Path(__file__).resolve().parent.parent
+    h = hashlib.sha256()
+    for p in sorted(list(base.glob("*.py")) + list((base / "kernel").glob("*.py"))):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        h.update(p.relative_to(base).as_posix().encode("utf-8"))
+        h.update(b"\0")
+        h.update(data)
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
+def prune_sessions(root, keep=3) -> list[str]:
+    """Archive the idle, clean sessions of one project `root` (str or Path) beyond the `keep`
+    most recent (`<root>/.stepcheck/sessions_archive/`), and drop them from the registry. A
+    session that still holds DIRTY_OMISSION_RISK or REJECTED nodes is kept: it has something
+    to say. Returns the archived session ids. Historical sessions are views of an earlier
+    tree; left around, each one answers the hooks about a HEAD it never saw."""
+    root_path = Path(root).resolve()
+    folder = root_path / ".stepcheck" / "sessions"
+    if not folder.is_dir():
+        return []
+    files = sorted(folder.glob("sk-*.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    archived: list[str] = []
+    kernel = StateKernel()
+    for f in files[keep:]:
+        sid = f.stem
+        try:
+            report = kernel.omission_report(sid)
+        except (KeyError, ValueError, OSError):
+            report = {"dirty": [], "rejected": []}
+        if report["dirty"] or report["rejected"]:
+            continue
+        archive = root_path / ".stepcheck" / "sessions_archive"
+        archive.mkdir(parents=True, exist_ok=True)
+        try:
+            f.replace(archive / f.name)
+        except OSError:
+            continue
+        kernel._sessions.pop(sid, None)
+        archived.append(sid)
+    if archived:
+        home = _state_home()
+        data = _read_json(home / "sessions.json")
+        for sid in archived:
+            data.pop(sid, None)
+        _write_json(home / "sessions.json", data)
+    return archived

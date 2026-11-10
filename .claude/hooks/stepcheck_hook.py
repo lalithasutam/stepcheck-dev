@@ -31,7 +31,10 @@ STEPCHECK_HOOK_AUTOSTART=0 turns that off.
 The relay imports only the standard library and is installed as `python -S` (no
 site / .pth scan at start-up); the offline fallback runs site.main() itself
 before importing the kernel. PostToolUse on an editing tool adopts the written
-bytes into the session at once.
+bytes into the session at once. The gateway is started with the interpreter
+`stepcheck hooks` recorded for this install ($STEPCHECK_HOME/interpreters.json,
+or $STEPCHECK_PYTHON), and when the `python` on PATH cannot import the kernel
+the in-process decision is delegated to that interpreter instead of failing open.
 
 SessionStart warms the gateway before the session's first tool call: offline, it
 starts the detached daemon and waits until it listens (STEPCHECK_HOOK_WARM_WAIT,
@@ -50,6 +53,36 @@ from urllib.parse import urlsplit
 _T0 = time.perf_counter()
 URL = os.environ.get("STEPCHECK_HOOK_URL", "http://127.0.0.1:8420/v1/step/hook")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+IDENT: dict = {}  # the gateway's identity from the last answer's X-StepCheck-* headers (the body stays the bare answer)
+
+
+def _note_identity(headers) -> None:
+    for k, v in headers:
+        k = k.strip().lower()
+        if k == "x-stepcheck-build":
+            IDENT["build_id"] = v.strip()
+        elif k == "x-stepcheck-pid":
+            IDENT["pid"] = v.strip()
+        elif k == "x-stepcheck-daemon":
+            IDENT["daemon"] = v.strip() == "1"
+
+
+def _health_identity():
+    """GET /health on the gateway (a few ms): the identity of a gateway whose hook answer
+    carried no headers — a broken build answering 422 before the endpoint ever runs."""
+    try:
+        host, port = _endpoint()
+        with socket.create_connection((host, port), timeout=0.05) as s:
+            s.settimeout(1.0)
+            s.sendall(f"GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode("ascii"))
+            data = b""
+            while chunk := s.recv(65536):
+                data += chunk
+        body = data.partition(b"\r\n\r\n")[2]
+        h = json.loads(body[body.find(b"{"):body.rfind(b"}") + 1])
+        return {"build_id": h.get("kernel_build_id"), "pid": h.get("pid"), "daemon": bool(h.get("daemon"))}
+    except Exception:  # noqa: BLE001 — not a StepCheck gateway, or gone
+        return None
 _DAEMON = ("import json, os, sys; backend, port, state = sys.argv[1:4]; sys.path.insert(0, backend); "
            "os.environ['STEPCHECK_DAEMON'] = '1'; "
            "open(state, 'w').write(json.dumps({'pid': os.getpid(), 'port': int(port)})); import cli; "
@@ -70,6 +103,7 @@ def _post(payload: bytes) -> bytes:
 
         req = urllib.request.Request(URL, data=payload, headers={"content-type": "application/json"})
         with urllib.request.urlopen(req, timeout=float(os.environ.get("STEPCHECK_HOOK_TIMEOUT", "2"))) as r:
+            _note_identity(r.headers.items())
             return r.read()
     host, port = _endpoint()
     path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
@@ -85,6 +119,7 @@ def _post(payload: bytes) -> bytes:
             chunks.append(chunk)
     head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
     status_line = head.split(b"\r\n", 1)[0]
+    _note_identity(line.decode("latin-1").partition(":")[::2] for line in head.split(b"\r\n")[1:] if b":" in line)
     if status_line.split(b" ", 2)[1:2] != [b"200"]:
         raise OSError(f"gateway answered {status_line!r}")
     if b"transfer-encoding: chunked" in head.lower():
@@ -118,11 +153,14 @@ def _warm_gateway(backend, force=False) -> bool:
         os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
         kwargs = {"stdin": subprocess.DEVNULL, "close_fds": True, "cwd": backend}
         if os.name == "nt":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: a hidden console of its own, so the daemon
+            # outlives the hook and ignores its Ctrl+C. Not DETACHED_PROCESS: a venv's redirecting
+            # python.exe launched detached can stall before the interpreter starts.
+            kwargs["creationflags"] = 0x08000000 | 0x00000200
         else:
             kwargs["start_new_session"] = True
         with open(os.path.join(home, f"gateway-{port}.log"), "ab") as log:
-            subprocess.Popen([sys.executable, "-c", _DAEMON, backend, str(port),
+            subprocess.Popen([_python(backend), "-c", _DAEMON, backend, str(port),
                               os.path.join(home, f"gateway-{port}.json")], stdout=log, stderr=log, **kwargs)
         return True
     except OSError:
@@ -131,6 +169,51 @@ def _warm_gateway(backend, force=False) -> bool:
 
 def _is_backend(c) -> bool:
     return bool(c) and os.path.isfile(os.path.join(c, "hooks.py")) and os.path.isfile(os.path.join(c, "kernel", "_gates.py"))
+
+
+def _python(backend):
+    """The interpreter for the gateway and the in-process gates: $STEPCHECK_PYTHON, else the
+    one `stepcheck hooks` recorded for this backend ($STEPCHECK_HOME/interpreters.json), else
+    this one. The relay runs as whatever `python` is first on PATH, and after a reboot that
+    is often not the virtualenv StepCheck's dependencies live in."""
+    cands = [os.environ.get("STEPCHECK_PYTHON")]
+    try:
+        home = os.environ.get("STEPCHECK_HOME") or os.path.join(os.path.expanduser("~"), ".stepcheck")
+        with open(os.path.join(home, "interpreters.json"), encoding="utf-8") as f:
+            cands.append(json.load(f).get(os.path.normcase(os.path.abspath(backend))))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    for c in cands:
+        if c and os.path.isfile(c):
+            return c
+    return sys.executable
+
+
+def _delegate(event, backend):
+    """This interpreter cannot import the kernel (StepCheck's dependencies are not installed
+    in it): run the same hook under the recorded interpreter and relay its answer and exit
+    code. None when there is no other interpreter to ask."""
+    script = globals().get("__file__")
+    if backend is None or not script or os.environ.get("STEPCHECK_HOOK_DELEGATED"):
+        return None
+    py = _python(backend)
+    if os.path.normcase(os.path.abspath(py)) == os.path.normcase(os.path.abspath(sys.executable)):
+        return None
+    import subprocess
+
+    try:
+        done = subprocess.run([py, script], input=json.dumps(event).encode("utf-8"), capture_output=True,
+                              env=dict(os.environ, STEPCHECK_HOOK_DELEGATED="1", STEPCHECK_BACKEND=backend),
+                              timeout=float(os.environ.get("STEPCHECK_HOOK_DELEGATE_TIMEOUT", "9")))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sys.stdout.flush()
+    sys.stdout.buffer.write(done.stdout)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.stderr.buffer.write(done.stderr)
+    sys.stderr.flush()
+    return done.returncode
 
 
 def _load_site() -> None:
@@ -243,6 +326,55 @@ def _session_start(event) -> int:
     return 0
 
 
+def _local_build_id(backend=None):
+    """`kernel.build_id()` computed here from the code on disk, standard library only: sha256
+    over the path and bytes of every backend/*.py and backend/kernel/*.py, 16 hex chars."""
+    import hashlib
+
+    backend = backend or _backend_dir()
+    if backend is None:
+        return None
+    h = hashlib.sha256()
+    files = sorted([os.path.join(backend, n) for n in os.listdir(backend) if n.endswith(".py")]
+                   + [os.path.join(backend, "kernel", n) for n in os.listdir(os.path.join(backend, "kernel")) if n.endswith(".py")],
+                  key=lambda p: os.path.relpath(p, backend).replace(os.sep, "/"))
+    for p in files:
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        h.update(os.path.relpath(p, backend).replace(os.sep, "/").encode("utf-8"))
+        h.update(b"\0")
+        h.update(data)
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
+def _retire_if_stale(ident) -> bool:
+    """True when the gateway that answered runs a kernel build other than the one on disk.
+    Our own daemon is told to exit (its pid is in the identity) so the next call warms a
+    fresh one; a gateway started by hand is left running and reported on stderr."""
+    local = _local_build_id()
+    if local is None or ident.get("build_id") == local:
+        return False
+    if ident.get("daemon") and ident.get("pid") and int(ident["pid"]) != os.getpid():
+        import signal
+
+        try:
+            os.kill(int(ident["pid"]), signal.SIGTERM)
+        except OSError:
+            pass
+        _wait(False, 5)
+        _warm_gateway(_backend_dir(), force=True)
+        sys.stderr.write("stepcheck hook: the gateway ran stale kernel code (build "
+                         f"{ident.get('build_id')} vs {local} on disk); restarted it, this call is decided in-process\n")
+    else:
+        sys.stderr.write(f"stepcheck hook: the gateway runs stale kernel code (build {ident.get('build_id')} vs {local} "
+                         "on disk); this call is decided in-process — restart `stepcheck up`\n")
+    return True
+
+
 def _emit(event, out) -> int:
     out = {k: v for k, v in (out or {}).items() if k != "stepcheck_gateway"}
     if not out:
@@ -272,7 +404,17 @@ def main() -> int:
         return _session_start(event)
     try:
         out = json.loads(_post(json.dumps(event).encode("utf-8")) or b"{}")
-    except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout
+        ident = dict(IDENT) or (out.get("stepcheck_gateway") if isinstance(out, dict) else None)
+        if ident and ident.get("build_id") and _retire_if_stale(ident):
+            raise RuntimeError("stale gateway build")  # answered by old RAM: decide in-process, a fresh daemon warms
+    except Exception as exc:  # noqa: BLE001 — offline gateway, bad JSON, timeout, stale build
+        if not isinstance(exc, RuntimeError):
+            # the gateway answered, just not usefully (a non-200, a body that is not JSON): its
+            # identity headers, or failing those its /health, still say which build it runs,
+            # so a stale daemon is retired here as well
+            ident = dict(IDENT) if IDENT.get("build_id") else (_health_identity() if "gateway answered" in str(exc) else None)
+            if ident and ident.get("build_id"):
+                _retire_if_stale(ident)
         offline = f"gateway offline ({exc.__class__.__name__})"
         command = str((event.get("tool_input") or {}).get("command") or "") if event.get("tool_name") == "Bash" else ""
         sovereign = bool(re.search(r"(?:^|[\s;&|(`])stepcheck(?:\.exe)?\s+allow\b|declared\.jsonl", command, re.I))
@@ -290,6 +432,9 @@ def main() -> int:
         try:
             out = _in_process(event, backend)
         except Exception as inner:  # noqa: BLE001 — a kernel failure must not brick the agent
+            rc = _delegate(event, backend) if isinstance(inner, ImportError) else None
+            if rc is not None:
+                return _trace(rc)
             sys.stderr.write(f"stepcheck hook: {offline}, in-process check failed ({inner!r}); allowing.\n")
             return _trace(0)
         if out is None:

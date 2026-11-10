@@ -278,7 +278,8 @@ def test_connect_installs_a_chained_pre_commit_gate_and_cursor_mcp_and_disconnec
     assert "stepcheck pre-commit" in hook_text and "diff --staged" in hook_text and "pre-commit.stepcheck-chained" in hook_text
     assert (hooks_dir / "pre-commit.stepcheck-chained").read_text(encoding="utf-8") == user_hook
     cursor = json.loads((root / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
-    assert cursor["mcpServers"]["stepcheck"]["url"].endswith("/mcp/")
+    entry = cursor["mcpServers"]["stepcheck"]  # Slice 39: stdio, so a cold boot never meets a refused port
+    assert entry["args"][-1] == "mcp" and Path(entry["command"]).is_file() and "url" not in entry
 
     # a staged guard drop is refused at commit time, whatever wrote it; the user hook still ran
     _write(root, "mod.py", DROPPED)
