@@ -1,0 +1,92 @@
+name: Cloud CI
+
+"on":
+  push:
+    paths:
+      - "cloud/**"
+      - ".github/workflows/cloud-ci.yml"
+  pull_request:
+    paths:
+      - "cloud/**"
+      - ".github/workflows/cloud-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: cloud tests / py3.12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: cloud/requirements.txt
+
+      - name: Install the published engine and the cloud requirements
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r cloud/requirements.txt pytest
+
+      - name: Cloud tests (offline, end to end)
+        run: python -m pytest cloud/tests -q
+
+  docker:
+    name: Dockerfile build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -f cloud/Dockerfile -t stepcheck-cloud:ci .
+
+      - name: The image refuses to start without a signing key
+        run: |
+          if docker run --rm stepcheck-cloud:ci python -c "from cloud.app import create_app; create_app()"; then
+            echo "::error::the service started without STEPCHECK_SIGNING_KEY_PEM"
+            exit 1
+          fi
+
+      - name: The engine judges a transition inside the image
+        run: |
+          docker run --rm stepcheck-cloud:ci python -c "
+          from cloud.github_app import judge_file
+          before = 'def charge(amount):\n    if amount <= 0:\n        raise ValueError(amount)\n    return amount\n'
+          result = judge_file('billing.py', before, before.replace('<= 0', '< 0'))
+          assert result['finding'] and result['finding']['gate'] == 'C' and result['guards'] == 1, result
+          print('judged:', result['finding']['gate'], result['finding']['symbol'])
+          "
+
+      - name: Start the service
+        run: |
+          openssl genpkey -algorithm ed25519 -out signing.pem
+          openssl pkey -in signing.pem -pubout -out expected-pubkey.pem
+          docker run -d --name stepcheck-cloud -p 8080:8080 \
+            -e STEPCHECK_SIGNING_KEY_PEM="$(cat signing.pem)" \
+            -e STEPCHECK_GITHUB_WEBHOOK_SECRET=ci-webhook-secret \
+            stepcheck-cloud:ci
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8080/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the service did not become healthy"
+          docker logs stepcheck-cloud
+          exit 1
+
+      - name: Smoke test /health and the public key
+        run: |
+          curl --silent --fail http://127.0.0.1:8080/health | tee health.json
+          python3 -c "import json; d = json.load(open('health.json')); assert d['status'] == 'ok' and len(d['keyid']) == 64, d"
+          curl --silent --fail http://127.0.0.1:8080/.well-known/stepcheck-pubkey.pem -o served-pubkey.pem
+          diff expected-pubkey.pem served-pubkey.pem
+          # an unsigned webhook is refused by the running container
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST \
+            -H 'X-GitHub-Event: ping' -d '{}' http://127.0.0.1:8080/webhooks/github)
+          test "$code" = "401"
+
+      - name: Container logs
+        if: always()
+        run: docker logs stepcheck-cloud || true
